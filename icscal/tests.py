@@ -8,6 +8,7 @@ Run with:  python -m pytest tests.py -v
 from __future__ import annotations
 
 from datetime import date, datetime, timedelta
+import os
 from typing import Optional
 
 import pytz
@@ -1043,3 +1044,145 @@ class TestCalendarId:
         events = _result([ics0, ics1], now)
         assert len(events) == 1
         assert events[0]["calendar_id"] == 0
+
+
+# ---------------------------------------------------------------------------
+# K. windows_zones — file cache
+# ---------------------------------------------------------------------------
+
+class TestWindowsZonesFileCache:
+
+    def setup_method(self):
+        """Reset to memory-only mode and clear in-memory cache before each test."""
+        try:
+            from .windows_zones import configure, reload
+        except ImportError:
+            from windows_zones import configure, reload
+        configure(file_cache=False)
+        reload(use_fallback=True)
+
+    def _tmpfile(self, suffix=".json"):
+        """Create a temp file path in the project's own temp dir (avoids Windows ACL issues)."""
+        import tempfile, shutil
+        d = tempfile.mkdtemp(prefix="wz_test_", dir=os.path.dirname(__file__))
+        self._tmpdirs = getattr(self, "_tmpdirs", [])
+        self._tmpdirs.append(d)
+        return os.path.join(d, "zones" + suffix)
+
+    def teardown_method(self):
+        """Remove temp dirs created by _tmpfile."""
+        import shutil
+        for d in getattr(self, "_tmpdirs", []):
+            shutil.rmtree(d, ignore_errors=True)
+
+    def test_memory_mode_default(self):
+        """Default mode is memory-only."""
+        try:
+            from .windows_zones import cache_info
+        except ImportError:
+            from windows_zones import cache_info
+        info = cache_info()
+        assert info["mode"] == "memory"
+        assert info["cache_path"] is None
+
+    def test_file_cache_mode_flag(self):
+        """configure(file_cache=True) switches mode."""
+        try:
+            from .windows_zones import configure, cache_info
+        except ImportError:
+            from windows_zones import configure, cache_info
+        path = self._tmpfile()
+        configure(file_cache=True, cache_path=path)
+        info = cache_info()
+        assert info["mode"] == "file"
+        assert info["cache_path"] == path
+
+    def test_file_cache_written_on_load(self):
+        """When file_cache=True and no file exists, file is created after load."""
+        import json as _json
+        try:
+            from .windows_zones import configure, reload, cache_info
+        except ImportError:
+            from windows_zones import configure, reload, cache_info
+        path = self._tmpfile()
+        configure(file_cache=True, cache_path=path)
+        reload(use_fallback=True)
+        try:
+            from .windows_zones import _write_file_cache, _FALLBACK
+        except ImportError:
+            from windows_zones import _write_file_cache, _FALLBACK
+        _write_file_cache(dict(_FALLBACK))
+        assert os.path.exists(path)
+        with open(path) as f:
+            data = _json.load(f)
+        assert "fetched_at" in data
+        assert "mapping" in data
+        assert data["mapping"]["Eastern Standard Time"] == "America/New_York"
+
+    def test_fresh_file_cache_is_used(self):
+        """Fresh file cache must be returned without hitting CLDR."""
+        import json as _json, time as _time
+        try:
+            from .windows_zones import configure, reload, _write_file_cache, _FALLBACK, windows_to_iana
+        except ImportError:
+            from windows_zones import configure, reload, _write_file_cache, _FALLBACK, windows_to_iana
+        path = self._tmpfile()
+        custom = dict(_FALLBACK)
+        custom["Test Zone"] = "Test/Zone"
+        configure(file_cache=True, cache_path=path, cache_ttl_seconds=3600)
+        _write_file_cache(custom)
+        reload()  # should read from fresh file
+        assert windows_to_iana("Test Zone") == "Test/Zone"
+
+    def test_stale_file_cache_triggers_refetch(self):
+        """Stale file cache (older than TTL) must trigger a refetch attempt."""
+        import json as _json, time as _time
+        try:
+            from .windows_zones import configure, _FALLBACK, cache_info
+        except ImportError:
+            from windows_zones import configure, _FALLBACK, cache_info
+        path = self._tmpfile()
+        configure(file_cache=True, cache_path=path, cache_ttl_seconds=1)
+        data = {"fetched_at": _time.time() - 100, "mapping": dict(_FALLBACK)}
+        with open(path, "w") as f:
+            _json.dump(data, f)
+        info = cache_info()
+        assert info["file_is_fresh"] is False
+
+    def test_ttl_respected(self):
+        """File younger than TTL is fresh; older than TTL is stale."""
+        import json as _json, time as _time
+        try:
+            from .windows_zones import configure, cache_info, _FALLBACK
+        except ImportError:
+            from windows_zones import configure, cache_info, _FALLBACK
+        path = self._tmpfile()
+        configure(file_cache=True, cache_path=path, cache_ttl_seconds=3600)
+        data_fresh = {"fetched_at": _time.time(), "mapping": dict(_FALLBACK)}
+        with open(path, "w") as f:
+            _json.dump(data_fresh, f)
+        assert cache_info()["file_is_fresh"] is True
+        data_stale = {"fetched_at": _time.time() - 7200, "mapping": dict(_FALLBACK)}
+        with open(path, "w") as f:
+            _json.dump(data_stale, f)
+        assert cache_info()["file_is_fresh"] is False
+
+    def test_cache_info_entries_count(self):
+        """cache_info returns correct entry count."""
+        try:
+            from .windows_zones import reload, cache_info
+        except ImportError:
+            from windows_zones import reload, cache_info
+        reload(use_fallback=True)
+        info = cache_info()
+        assert info["entries"] > 50
+
+    def test_configure_invalidates_memory_cache(self):
+        """Calling configure() must invalidate the in-memory cache."""
+        try:
+            import windows_zones as wz
+        except ImportError:
+            import importlib, sys
+            wz = sys.modules.get("windows_zones") or sys.modules.get("icscal.windows_zones")
+        wz.configure(file_cache=False)
+        assert wz._mem_cache is None
