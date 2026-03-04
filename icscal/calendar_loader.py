@@ -18,7 +18,10 @@ import pytz
 import recurring_ical_events
 from icalendar import Calendar, Event
 
-from .windows_zones import windows_to_iana as _win_to_iana
+try:
+    from .windows_zones import windows_to_iana as _win_to_iana
+except ImportError:
+    from windows_zones import windows_to_iana as _win_to_iana  # type: ignore[no-redef]
 
 logger = logging.getLogger(__name__)
 
@@ -403,6 +406,7 @@ def get_events_for_day(
             "end_iso": ev["end"].isoformat(),
             "start_ms": ev["start_ms"],
             "end_ms": ev["end_ms"],
+            "calendar_id": ev["calendar_index"],
             "calendar_url": ev["calendar_url"],
             "is_current": i == current_idx,
             "is_next": i == next_idx,

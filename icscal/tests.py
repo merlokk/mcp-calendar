@@ -13,7 +13,10 @@ from typing import Optional
 import pytz
 import pytest
 
-from calendar_loader import get_events_for_day
+try:
+    from .calendar_loader import get_events_for_day
+except ImportError:
+    from calendar_loader import get_events_for_day  # type: ignore[no-redef]
 
 # ---------------------------------------------------------------------------
 # Timezone shortcuts
@@ -924,42 +927,66 @@ class TestNowAndTargetDate:
 class TestWindowsZones:
 
     def test_common_mapping_eastern(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         assert windows_to_iana("Eastern Standard Time") == "America/New_York"
 
     def test_common_mapping_pacific(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         assert windows_to_iana("Pacific Standard Time") == "America/Los_Angeles"
 
     def test_common_mapping_central_europe(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         result = windows_to_iana("Central Europe Standard Time")
         assert result == "Europe/Budapest"
 
     def test_common_mapping_fle(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         result = windows_to_iana("FLE Standard Time")
         # FLE = Finland/Kyiv region
         assert result in ("Europe/Kiev", "Europe/Kyiv", "Europe/Helsinki")
 
     def test_unknown_name_returns_none(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         assert windows_to_iana("Totally Fake Standard Time") is None
 
     def test_utc_maps_to_utc(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         # CLDR maps "UTC" to "Etc/UTC"; both are valid IANA identifiers
         assert windows_to_iana("UTC") in ("UTC", "Etc/UTC")
 
     def test_reload_with_fallback(self):
-        from windows_zones import reload, windows_to_iana
+        try:
+            from .windows_zones import reload, windows_to_iana
+        except ImportError:
+            from windows_zones import reload, windows_to_iana  # type: ignore[no-redef]
         count = reload(use_fallback=True)
         assert count > 50  # fallback has 100+ entries
         # Mapping still works after reload
         assert windows_to_iana("Eastern Standard Time") == "America/New_York"
 
     def test_fallback_covers_all_common_exchange_zones(self):
-        from windows_zones import windows_to_iana
+        try:
+            from .windows_zones import windows_to_iana
+        except ImportError:
+            from windows_zones import windows_to_iana  # type: ignore[no-redef]
         common = [
             "Eastern Standard Time",
             "Central Standard Time",
@@ -976,3 +1003,43 @@ class TestWindowsZones:
         for name in common:
             result = windows_to_iana(name)
             assert result is not None, f"{name!r} not found in mapping"
+
+
+# ---------------------------------------------------------------------------
+# J. calendar_id field
+# ---------------------------------------------------------------------------
+
+class TestCalendarId:
+
+    def test_calendar_id_matches_position_in_list(self):
+        """calendar_id must equal the 0-based index of the source calendar."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics0 = _ics(_event("uid-0", "From Cal 0", "20250615T100000Z", "20250615T110000Z"))
+        ics1 = _ics(_event("uid-1", "From Cal 1", "20250615T120000Z", "20250615T130000Z"))
+        ics2 = _ics(_event("uid-2", "From Cal 2", "20250615T140000Z", "20250615T150000Z"))
+        events = _result([ics0, ics1, ics2], now)
+        by_summary = {e["summary"]: e for e in events}
+        assert by_summary["From Cal 0"]["calendar_id"] == 0
+        assert by_summary["From Cal 1"]["calendar_id"] == 1
+        assert by_summary["From Cal 2"]["calendar_id"] == 2
+
+    def test_calendar_id_present_in_all_events(self):
+        """Every returned event must have a calendar_id field."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = _ics(
+            _event("e1", "A", "20250615T100000Z", "20250615T110000Z"),
+            _event("e2", "B", "20250615T120000Z", "20250615T130000Z"),
+        )
+        events = _result([ics], now)
+        for ev in events:
+            assert "calendar_id" in ev
+            assert isinstance(ev["calendar_id"], int)
+
+    def test_calendar_id_winner_is_lowest_index(self):
+        """Duplicate UID: calendar_id reflects the winning (lowest-index) calendar."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics0 = _ics(_event("dup", "Primary",   "20250615T100000Z", "20250615T110000Z"))
+        ics1 = _ics(_event("dup", "Secondary", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics0, ics1], now)
+        assert len(events) == 1
+        assert events[0]["calendar_id"] == 0
