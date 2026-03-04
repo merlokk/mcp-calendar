@@ -1565,3 +1565,301 @@ class TestTargetDateAsDatetime:
         )
         # now=23:00 → event is past, no next
         assert not any(e["is_next"] for e in events)
+
+
+# ===========================================================================
+# N. location and organizer fields
+# ===========================================================================
+
+class TestLocationOrganizer:
+
+    def test_location_present_in_output(self):
+        """LOCATION property must appear in event dict."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:loc-uid\r\n"
+            "SUMMARY:Office Meeting\r\n"
+            "DTSTART:20250615T100000Z\r\n"
+            "DTEND:20250615T110000Z\r\n"
+            "LOCATION:Room 42, HQ Building\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now)
+        assert events[0]["location"] == "Room 42, HQ Building"
+
+    def test_location_none_when_absent(self):
+        """Missing LOCATION → location field is None (not empty string)."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = _ics(_event("u", "No Location", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert events[0]["location"] is None
+
+    def test_location_none_when_empty(self):
+        """Empty LOCATION: → location field is None."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:loc-empty-uid\r\n"
+            "SUMMARY:Empty Location\r\n"
+            "DTSTART:20250615T100000Z\r\n"
+            "DTEND:20250615T110000Z\r\n"
+            "LOCATION:\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now)
+        assert events[0]["location"] is None
+
+    def test_location_url(self):
+        """LOCATION can be a URL (Teams / Zoom link)."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:loc-url-uid\r\n"
+            "SUMMARY:Zoom Call\r\n"
+            "DTSTART:20250615T100000Z\r\n"
+            "DTEND:20250615T110000Z\r\n"
+            "LOCATION:https://zoom.us/j/123456789\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now)
+        assert events[0]["location"] == "https://zoom.us/j/123456789"
+
+    def test_organizer_mailto_stripped(self):
+        """ORGANIZER:mailto:user@example.com → organizer == 'user@example.com'."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:org-uid\r\n"
+            "SUMMARY:Organized Meeting\r\n"
+            "DTSTART:20250615T100000Z\r\n"
+            "DTEND:20250615T110000Z\r\n"
+            "ORGANIZER:mailto:boss@example.com\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now)
+        assert events[0]["organizer"] == "boss@example.com"
+
+    def test_organizer_mailto_case_insensitive(self):
+        """MAILTO: prefix is stripped case-insensitively."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:org-case-uid\r\n"
+            "SUMMARY:Meeting\r\n"
+            "DTSTART:20250615T100000Z\r\n"
+            "DTEND:20250615T110000Z\r\n"
+            "ORGANIZER:MAILTO:user@example.com\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now)
+        assert events[0]["organizer"] == "user@example.com"
+
+    def test_organizer_none_when_absent(self):
+        """Missing ORGANIZER → organizer field is None."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = _ics(_event("u", "Meeting", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert events[0]["organizer"] is None
+
+    def test_location_and_organizer_both_present(self):
+        """Both fields populated simultaneously."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:both-uid\r\n"
+            "SUMMARY:Full Event\r\n"
+            "DTSTART:20250615T100000Z\r\n"
+            "DTEND:20250615T110000Z\r\n"
+            "LOCATION:Conference Room A\r\n"
+            "ORGANIZER:mailto:organizer@corp.com\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now)
+        assert events[0]["location"]  == "Conference Room A"
+        assert events[0]["organizer"] == "organizer@corp.com"
+
+
+# ===========================================================================
+# O. Windows TZID normalization in raw ICS bytes
+# ===========================================================================
+
+class TestWindowsTzidNormalization:
+
+    def _ics_with_windows_tzid(self, tzid: str, dt_start: str, dt_end: str,
+                                uid: str = "tz-uid", summary: str = "TZ Event") -> str:
+        """Build ICS with a Windows TZID and NO VTIMEZONE block."""
+        return (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Microsoft Corporation//Outlook//EN\r\n"
+            f"BEGIN:VEVENT\r\n"
+            f"UID:{uid}\r\n"
+            f"SUMMARY:{summary}\r\n"
+            f"DTSTART;TZID={tzid}:{dt_start}\r\n"
+            f"DTEND;TZID={tzid}:{dt_end}\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+
+    def test_eastern_standard_time_correct_utc(self):
+        """
+        Eastern Standard Time (UTC-5 winter) → America/New_York.
+        DTSTART 10:00 EST = 15:00 UTC → event in UTC window [14:00, 16:00).
+        """
+        now = _make_dt(2025, 2, 10, 15, 0, UTC)  # 10:00 EST
+        ics = self._ics_with_windows_tzid(
+            "Eastern Standard Time",
+            "20250210T100000",  # 10:00 local = 15:00 UTC (EST = UTC-5)
+            "20250210T110000",
+        )
+        events = _result([ics], now, user_tz="America/New_York",
+                         target_date=date(2025, 2, 10))
+        assert len(events) == 1
+        # event starts at 15:00 UTC → now=15:00 UTC → is_current
+        assert events[0]["is_current"] is True
+
+    def test_central_europe_standard_time_correct_utc(self):
+        """
+        Central Europe Standard Time (UTC+1 winter) → Europe/Budapest.
+        DTSTART 10:00 CET = 09:00 UTC.
+        """
+        now = _make_dt(2025, 2, 10, 9, 0, UTC)  # 10:00 CET
+        ics = self._ics_with_windows_tzid(
+            "Central Europe Standard Time",
+            "20250210T100000",  # 10:00 CET = 09:00 UTC
+            "20250210T110000",
+        )
+        events = _result([ics], now, user_tz="Europe/Budapest",
+                         target_date=date(2025, 2, 10))
+        assert len(events) == 1
+        assert events[0]["is_current"] is True
+
+    def test_fle_standard_time_correct_utc(self):
+        """
+        FLE Standard Time (UTC+2 winter) → Europe/Kiev.
+        DTSTART 10:00 EET = 08:00 UTC.
+        """
+        now = _make_dt(2025, 2, 10, 8, 0, UTC)  # 10:00 Kyiv
+        ics = self._ics_with_windows_tzid(
+            "FLE Standard Time",
+            "20250210T100000",  # 10:00 EET = 08:00 UTC
+            "20250210T110000",
+        )
+        events = _result([ics], now, user_tz="Europe/Kiev",
+                         target_date=date(2025, 2, 10))
+        assert len(events) == 1
+        assert events[0]["is_current"] is True
+
+    def test_vtimezone_tzid_not_remapped(self):
+        """
+        TZID with matching VTIMEZONE block must NOT be remapped.
+        Pacific Standard Time has VTIMEZONE → keep original TZID.
+        DTSTART 10:00 PDT (summer, UTC-7) = 17:00 UTC.
+        """
+        now = _make_dt(2025, 6, 15, 17, 0, UTC)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Microsoft//Outlook//EN\r\n"
+            + PACIFIC_VTIMEZONE + "\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:pacific-norm-uid\r\n"
+            "SUMMARY:Pacific Event\r\n"
+            "DTSTART;TZID=Pacific Standard Time:20250615T100000\r\n"
+            "DTEND;TZID=Pacific Standard Time:20250615T110000\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now, user_tz="America/Los_Angeles",
+                         target_date=date(2025, 6, 15))
+        assert len(events) == 1
+        assert events[0]["is_current"] is True
+
+    def test_unknown_tzid_without_vtimezone_does_not_crash(self):
+        """
+        Completely unknown TZID (no VTIMEZONE, no windows mapping) must not crash.
+        Event may or may not appear, but no exception raised.
+        """
+        now = _make_dt(2025, 6, 15, 10, 0, UTC)
+        ics = self._ics_with_windows_tzid(
+            "Totally Fake Time Zone XYZ",
+            "20250615T100000",
+            "20250615T110000",
+        )
+        # Should not raise
+        result = _result([ics], now, target_date=date(2025, 6, 15))
+        assert isinstance(result, list)
+
+    def test_multiple_windows_tzids_in_one_file(self):
+        """Two events with different Windows TZIDs, both remapped correctly."""
+        now = _make_dt(2025, 2, 10, 12, 0, UTC)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:est-uid\r\n"
+            "SUMMARY:EST Event\r\n"
+            "DTSTART;TZID=Eastern Standard Time:20250210T070000\r\n"  # 07:00 EST = 12:00 UTC
+            "DTEND;TZID=Eastern Standard Time:20250210T080000\r\n"
+            "END:VEVENT\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:fle-uid\r\n"
+            "SUMMARY:FLE Event\r\n"
+            "DTSTART;TZID=FLE Standard Time:20250210T150000\r\n"  # 15:00 EET = 13:00 UTC
+            "DTEND;TZID=FLE Standard Time:20250210T160000\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now, target_date=date(2025, 2, 10))
+        summaries = {e["summary"] for e in events}
+        assert "EST Event" in summaries
+        assert "FLE Event" in summaries
+
+    def test_normalize_does_not_affect_iana_tzid(self):
+        """
+        IANA TZID like 'America/New_York' must pass through unchanged.
+        (No VTIMEZONE block needed — icalendar handles IANA names natively.)
+        """
+        now = _make_dt(2025, 2, 10, 15, 0, UTC)
+        ics = (
+            "BEGIN:VCALENDAR\r\n"
+            "VERSION:2.0\r\n"
+            "PRODID:-//Test//Test//EN\r\n"
+            "BEGIN:VEVENT\r\n"
+            "UID:iana-uid\r\n"
+            "SUMMARY:IANA TZ Event\r\n"
+            "DTSTART;TZID=America/New_York:20250210T100000\r\n"  # 10:00 EST = 15:00 UTC
+            "DTEND;TZID=America/New_York:20250210T110000\r\n"
+            "END:VEVENT\r\n"
+            "END:VCALENDAR\r\n"
+        )
+        events = _result([ics], now, user_tz="America/New_York",
+                         target_date=date(2025, 2, 10))
+        assert len(events) == 1
+        assert events[0]["is_current"] is True
