@@ -915,3 +915,64 @@ class TestNowAndTargetDate:
         events = _result([ics_with, ics_empty], now)
         assert len(events) == 1
         assert events[0]["summary"] == "Has Event"
+
+
+# ---------------------------------------------------------------------------
+# I. windows_zones module
+# ---------------------------------------------------------------------------
+
+class TestWindowsZones:
+
+    def test_common_mapping_eastern(self):
+        from windows_zones import windows_to_iana
+        assert windows_to_iana("Eastern Standard Time") == "America/New_York"
+
+    def test_common_mapping_pacific(self):
+        from windows_zones import windows_to_iana
+        assert windows_to_iana("Pacific Standard Time") == "America/Los_Angeles"
+
+    def test_common_mapping_central_europe(self):
+        from windows_zones import windows_to_iana
+        result = windows_to_iana("Central Europe Standard Time")
+        assert result == "Europe/Budapest"
+
+    def test_common_mapping_fle(self):
+        from windows_zones import windows_to_iana
+        result = windows_to_iana("FLE Standard Time")
+        # FLE = Finland/Kyiv region
+        assert result in ("Europe/Kiev", "Europe/Kyiv", "Europe/Helsinki")
+
+    def test_unknown_name_returns_none(self):
+        from windows_zones import windows_to_iana
+        assert windows_to_iana("Totally Fake Standard Time") is None
+
+    def test_utc_maps_to_utc(self):
+        from windows_zones import windows_to_iana
+        # CLDR maps "UTC" to "Etc/UTC"; both are valid IANA identifiers
+        assert windows_to_iana("UTC") in ("UTC", "Etc/UTC")
+
+    def test_reload_with_fallback(self):
+        from windows_zones import reload, windows_to_iana
+        count = reload(use_fallback=True)
+        assert count > 50  # fallback has 100+ entries
+        # Mapping still works after reload
+        assert windows_to_iana("Eastern Standard Time") == "America/New_York"
+
+    def test_fallback_covers_all_common_exchange_zones(self):
+        from windows_zones import windows_to_iana
+        common = [
+            "Eastern Standard Time",
+            "Central Standard Time",
+            "Mountain Standard Time",
+            "Pacific Standard Time",
+            "GMT Standard Time",
+            "Central Europe Standard Time",
+            "Tokyo Standard Time",
+            "China Standard Time",
+            "India Standard Time",
+            "Arabian Standard Time",
+            "AUS Eastern Standard Time",
+        ]
+        for name in common:
+            result = windows_to_iana(name)
+            assert result is not None, f"{name!r} not found in mapping"
