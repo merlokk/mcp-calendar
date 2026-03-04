@@ -10,6 +10,7 @@ Dependencies: icalendar, recurring-ical-events, pytz
 from __future__ import annotations
 
 import logging
+import re
 import urllib.request
 from datetime import date, datetime, timedelta
 from typing import Any, Optional
@@ -50,15 +51,42 @@ def _resolve_user_tz(user_timezone: str) -> Any:
     return pytz.utc
 
 
-def _extract_vtimezone_tzids(cal: Calendar) -> set[str]:
-    """Return TZID values that have VTIMEZONE definitions in the calendar."""
+def _extract_vtimezone_tzids_from_raw(raw: bytes) -> set[str]:
+    """
+    Extract TZID values that have VTIMEZONE definitions in the raw ICS bytes.
+    These must NOT be remapped — the calendar already provides their DST rules.
+    """
     tzids: set[str] = set()
-    for component in cal.walk():
-        if component.name == "VTIMEZONE":
-            tzid = str(component.get("TZID", "")).strip()
-            if tzid:
-                tzids.add(tzid)
+    for m in re.finditer(rb"BEGIN:VTIMEZONE.*?TZID:([^\r\n]+)", raw, re.DOTALL):
+        tzids.add(m.group(1).decode("utf-8", errors="replace").strip())
     return tzids
+
+
+def _normalize_windows_tzids(raw: bytes) -> bytes:
+    """
+    Pre-process raw ICS bytes: replace Windows timezone names in TZID parameters
+    with their IANA equivalents, but only for TZIDs that do NOT have a matching
+    VTIMEZONE block (those are handled by icalendar natively).
+
+    Exchange / Outlook produces lines like:
+        DTSTART;TZID=Eastern Standard Time:20260209T100000
+    which icalendar cannot parse without a VTIMEZONE definition.
+    """
+    # Find TZIDs that already have VTIMEZONE definitions → leave them alone
+    protected = _extract_vtimezone_tzids_from_raw(raw)
+
+    def replace_tzid(m: re.Match) -> bytes:
+        tzid = m.group(1).decode("utf-8", errors="replace")
+        if tzid in protected:
+            return m.group(0)  # has VTIMEZONE — keep as-is
+        iana = _win_to_iana(tzid)
+        if iana and iana != tzid:
+            logger.debug("Remapping TZID %r → %r", tzid, iana)
+            return m.group(0).replace(m.group(1), iana.encode())
+        return m.group(0)
+
+    # Match TZID= in property parameters:  ;TZID=Some Name:  or  TZID=Some Name:
+    return re.sub(rb"(?:;|^)TZID=([^:;\r\n]+)", replace_tzid, raw, flags=re.MULTILINE)
 
 
 def _dt_to_utc(dt: Any) -> Optional[datetime]:
@@ -197,14 +225,15 @@ def get_events_for_day(
                 logger.error("Failed to fetch %r: %s", url, exc)
                 continue
 
+        # Normalize Windows TZID names → IANA before parsing.
+        # Must happen on raw bytes — icalendar cannot handle unknown TZID values.
+        raw = _normalize_windows_tzids(raw)
+
         try:
             cal = Calendar.from_ical(raw)
         except Exception as exc:
             logger.error("Failed to parse ICS from %r: %s", url, exc)
             continue
-
-        # CRITICAL: scan VTIMEZONE blocks first — do NOT remap tzids that have definitions
-        _extract_vtimezone_tzids(cal)
 
         # Collect master durations for CRITICAL recurring duration fix
         master_duration: dict[str, timedelta] = {}
