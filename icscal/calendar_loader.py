@@ -323,9 +323,13 @@ def get_events_for_day(
             if uid not in uid_winner:
                 uid_winner[uid] = cal_idx
 
+            _org_raw = component.get("ORGANIZER")
+            _org = str(_org_raw)[7:] if _org_raw and str(_org_raw).lower().startswith("mailto:") else (str(_org_raw) if _org_raw else None)
             collected.append({
                 "uid": uid,
-                "summary": str(component.get("SUMMARY", "")),
+                "summary": str(component.get("SUMMARY", "")).strip(),
+                "location": str(component.get("LOCATION", "")).strip() or None,
+                "organizer": _org,
                 "start": start,
                 "end": end,
                 "start_ms": int(start.timestamp() * 1000),
@@ -366,9 +370,13 @@ def get_events_for_day(
             if uid not in uid_winner:
                 uid_winner[uid] = cal_idx
 
+            _org_raw = component.get("ORGANIZER")
+            _org = str(_org_raw)[7:] if _org_raw and str(_org_raw).lower().startswith("mailto:") else (str(_org_raw) if _org_raw else None)
             collected.append({
                 "uid": uid,
-                "summary": str(component.get("SUMMARY", "")),
+                "summary": str(component.get("SUMMARY", "")).strip(),
+                "location": str(component.get("LOCATION", "")).strip() or None,
+                "organizer": _org,
                 "start": start,
                 "end": end,
                 "start_ms": int(start.timestamp() * 1000),
@@ -443,6 +451,8 @@ def get_events_for_day(
         output.append({
             "uid": ev["uid"],
             "summary": ev["summary"],
+            "location": ev.get("location"),
+            "organizer": ev.get("organizer"),
             "start_iso": ev["start"].isoformat(),
             "end_iso": ev["end"].isoformat(),
             "start_ms": ev["start_ms"],

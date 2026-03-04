@@ -32,7 +32,7 @@ def main():
         ],
         user_timezone="Asia/Nicosia",  # IANA or Windows tz name
         # target_date=datetime.fromisoformat("2026-02-13T00:00:01+02:00"),
-        target_date=datetime.fromisoformat("2026-03-02T15:00:01+02:00"),
+        # target_date=datetime.fromisoformat("2026-03-02T15:00:01+02:00"),
     )
 
     for e in events:
