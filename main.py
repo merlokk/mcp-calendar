@@ -12,7 +12,11 @@ def main():
     )
 
     for e in events:
-        print(e["summary"], e["start_iso"], "current:", e["is_current"])
+        print(e["summary"], e["start_iso"],
+              "current " if e["is_current"] else "",
+              "next " if e["is_next"] else "",
+              "next-overlapping " if e["is_next_overlapping"] else "",
+              "next-non-overlapping " if e["is_next_non_overlapping"] else "")
 
 
 
