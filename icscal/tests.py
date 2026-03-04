@@ -7,7 +7,6 @@ Run with:  python -m pytest tests.py -v
 """
 from __future__ import annotations
 
-import json
 from datetime import date, datetime, timedelta
 from typing import Optional
 
@@ -36,14 +35,13 @@ def _result(
 ) -> list[dict]:
     contents = [s.encode() for s in ics_list]
     urls = [f"mock://cal{i}.ics" for i in range(len(ics_list))]
-    json_str = get_events_for_day(
+    return get_events_for_day(
         calendar_urls=urls,
         user_timezone=user_tz,
         target_date=target_date,
         ics_contents=contents,
         now_override=now,
     )
-    return json.loads(json_str)
 
 
 # ---------------------------------------------------------------------------

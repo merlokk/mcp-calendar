@@ -9,7 +9,6 @@ Dependencies: icalendar, recurring-ical-events, pytz
 
 from __future__ import annotations
 
-import json
 import logging
 import urllib.request
 from datetime import date, datetime, timedelta
@@ -238,7 +237,7 @@ def get_events_for_day(
     target_date: Optional[date] = None,
     ics_contents: Optional[list[bytes]] = None,
     now_override: Optional[datetime] = None,
-) -> str:
+) -> list[dict]:
     """
     Load calendars and return a JSON array of events overlapping target_date
     in user_timezone.
@@ -253,7 +252,7 @@ def get_events_for_day(
 
     Returns
     -------
-    JSON string: list of event dicts sorted by start_ms.
+    list[dict]: events sorted by start_ms.
     """
     tz = _resolve_user_tz(user_timezone)
     now_utc: datetime = now_override or datetime.now(pytz.utc)
@@ -506,4 +505,4 @@ def get_events_for_day(
             "is_next_non_overlapping": i == next_non_overlapping_idx,
         })
 
-    return json.dumps(output, ensure_ascii=False, indent=2)
+    return output
