@@ -191,11 +191,30 @@ def get_events_for_day(
     list[dict]: events sorted by start_ms.
     """
     tz = _resolve_user_tz(user_timezone)
-    now_utc: datetime = now_override or datetime.now(pytz.utc)
+
+    # Resolve now_utc:
+    # 1. Explicit now_override always wins.
+    # 2. If target_date is a datetime (not just date), use it as now too.
+    # 3. Otherwise use real datetime.now().
+    if now_override is not None:
+        now_utc: datetime = now_override
+        if now_utc.tzinfo is None:
+            now_utc = pytz.utc.localize(now_utc)
+        now_utc = now_utc.astimezone(pytz.utc)
+    elif isinstance(target_date, datetime):
+        # caller passed a datetime as target_date — use it as "now" as well
+        now_utc = target_date if target_date.tzinfo else pytz.utc.localize(target_date)
+        now_utc = now_utc.astimezone(pytz.utc)
+    else:
+        now_utc = datetime.now(pytz.utc)
+
     local_now = now_utc.astimezone(tz)
 
     if target_date is None:
         target_date = local_now.date()
+    # datetime is a subclass of date — extract just the date part for window calculation
+    if isinstance(target_date, datetime):
+        target_date = target_date.astimezone(tz).date()
 
     # CRITICAL: window = [midnight today, midnight tomorrow) in user tz
     # Use normalize() after timedelta to handle DST transitions correctly
@@ -379,50 +398,43 @@ def get_events_for_day(
 
     deduped.sort(key=lambda e: e["start_ms"])
 
+    # ---------------------------------------------------------------------------
     # Current / Next logic
+    # All comparisons use now_utc (from now_override or datetime.now()).
+    # target_date only controls the window; "now" controls the flags.
+    # ---------------------------------------------------------------------------
     now_ms = int(now_utc.timestamp() * 1000)
 
+    # is_current: event that is happening right now (start <= now < end)
     current_idx: Optional[int] = None
     for i, ev in enumerate(deduped):
         if ev["start_ms"] <= now_ms < ev["end_ms"]:
             current_idx = i
             break
 
-    # CRITICAL: next starts at current.end, not at NOW
+    # is_next: first event that starts >= current.end (or >= now if no current),
+    #          i.e. does NOT overlap with current
     search_from_ms = deduped[current_idx]["end_ms"] if current_idx is not None else now_ms
     next_idx: Optional[int] = None
     for i, ev in enumerate(deduped):
-        if current_idx is not None and i == current_idx:
+        if i == current_idx:
             continue
         if ev["start_ms"] >= search_from_ms:
             next_idx = i
             break
 
-    # next_overlapping / next_non_overlapping
+    # is_next_overlapping: first event that starts AFTER current starts
+    #                      AND overlaps with current (start < current.end)
+    #                      i.e. it begins during current and runs concurrently
     next_overlapping_idx: Optional[int] = None
-    next_non_overlapping_idx: Optional[int] = None
-
-    if next_idx is not None:
-        next_ev = deduped[next_idx]
-
-        for i in range(next_idx + 1, len(deduped)):
-            ev = deduped[i]
-            if ev["start_ms"] >= next_ev["end_ms"]:
-                break
-            if ev["end_ms"] > next_ev["start_ms"]:
+    if current_idx is not None:
+        current_ev = deduped[current_idx]
+        for i, ev in enumerate(deduped):
+            if i == current_idx:
+                continue
+            # starts after current started, but before current ends → overlapping
+            if ev["start_ms"] > current_ev["start_ms"] and ev["start_ms"] < current_ev["end_ms"]:
                 next_overlapping_idx = i
-                break
-
-        cluster_end_ms = next_ev["end_ms"]
-        for ev in deduped[next_idx + 1:]:
-            if ev["start_ms"] >= cluster_end_ms:
-                break
-            if ev["end_ms"] > cluster_end_ms:
-                cluster_end_ms = ev["end_ms"]
-
-        for i in range(next_idx + 1, len(deduped)):
-            if deduped[i]["start_ms"] >= cluster_end_ms:
-                next_non_overlapping_idx = i
                 break
 
     # Build output
@@ -440,7 +452,6 @@ def get_events_for_day(
             "is_current": i == current_idx,
             "is_next": i == next_idx,
             "is_next_overlapping": i == next_overlapping_idx,
-            "is_next_non_overlapping": i == next_non_overlapping_idx,
         })
 
     return output

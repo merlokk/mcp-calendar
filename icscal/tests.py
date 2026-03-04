@@ -33,7 +33,7 @@ def _make_dt(year, month, day, hour, minute, tz=UTC) -> datetime:
 
 def _result(
     ics_list: list[str],
-    now: datetime,
+    now: Optional[datetime] = None,
     user_tz: str = "UTC",
     target_date: Optional[date] = None,
 ) -> list[dict]:
@@ -441,33 +441,26 @@ class TestOverlapDetection:
 
 class TestNextOverlapping:
 
-    def test_next_overlapping_found(self):
-        """
-        A 10:00-11:00, B 10:30-11:30 (overlaps A), C 12:00-13:00.
-        NOW 09:00 → next=A, next_overlapping=B, next_non_overlapping=C.
-        """
+    def test_next_overlapping_requires_current(self):
+        """is_next_overlapping only set when there is a current event."""
         now = _make_dt(2025, 6, 15, 9, 0)
         ics = _ics(
             _event("a", "A", "20250615T100000Z", "20250615T110000Z"),
             _event("b", "B", "20250615T103000Z", "20250615T113000Z"),
-            _event("c", "C", "20250615T120000Z", "20250615T130000Z"),
         )
         events = _result([ics], now)
-        nxt     = [e for e in events if e["is_next"]]
-        ov      = [e for e in events if e["is_next_overlapping"]]
-        non_ov  = [e for e in events if e["is_next_non_overlapping"]]
-        assert len(nxt) == 1    and nxt[0]["summary"] == "A"
-        assert len(ov) == 1     and ov[0]["summary"] == "B"
-        assert len(non_ov) == 1 and non_ov[0]["summary"] == "C"
+        # NOW is before A — no current, so no overlapping
+        assert not any(e["is_next_overlapping"] for e in events)
 
     def test_no_next_overlapping_when_no_overlap(self):
-        """Non-overlapping events → next_overlapping should be absent."""
-        now = _make_dt(2025, 6, 15, 9, 0)
+        """Events that don't overlap current → next_overlapping absent."""
+        now = _make_dt(2025, 6, 15, 10, 15)
         ics = _ics(
             _event("a", "A", "20250615T100000Z", "20250615T110000Z"),
             _event("b", "B", "20250615T120000Z", "20250615T130000Z"),
         )
         events = _result([ics], now)
+        # A is current; B starts after A ends → not overlapping
         assert not any(e["is_next_overlapping"] for e in events)
 
 
@@ -777,12 +770,15 @@ class TestOverrideEdgeCases:
 
 class TestClusterLogic:
 
-    def test_three_event_cluster_end(self):
+    def test_three_event_cluster_during_first(self):
         """
-        A 10:00-11:00, B 10:30-11:30, C 11:00-12:00.
-        Cluster end = 12:00. nextNonOverlapping = D at 14:00.
+        NOW during A (10:15).
+        A 10:00-11:00 → current
+        B 10:30-11:30 → next_overlapping (starts inside A)
+        C 11:00-12:00 → starts at A's end, not inside A → not overlapping
+        D 14:00-15:00 → next (first after A ends)
         """
-        now = _make_dt(2025, 6, 15, 9, 0)
+        now = _make_dt(2025, 6, 15, 10, 15)
         ics = _ics(
             _event("a", "A", "20250615T100000Z", "20250615T110000Z"),
             _event("b", "B", "20250615T103000Z", "20250615T113000Z"),
@@ -790,8 +786,11 @@ class TestClusterLogic:
             _event("d", "D", "20250615T140000Z", "20250615T150000Z"),
         )
         events = _result([ics], now)
-        non_ov = [e for e in events if e["is_next_non_overlapping"]]
-        assert len(non_ov) == 1 and non_ov[0]["summary"] == "D"
+        by = {e["summary"]: e for e in events}
+        assert by["A"]["is_current"] is True
+        assert by["B"]["is_next_overlapping"] is True
+        assert by["C"]["is_next"] is True   # starts exactly at A's end → next
+        assert by["D"]["is_next"] is False  # C comes first
 
     def test_events_at_same_start_overlap_cluster(self):
         """
@@ -1186,3 +1185,383 @@ class TestWindowsZonesFileCache:
             wz = sys.modules.get("windows_zones") or sys.modules.get("icscal.windows_zones")
         wz.configure(file_cache=False)
         assert wz._mem_cache is None
+
+
+# ===========================================================================
+# L. Flag semantics: is_current / is_next / is_next_overlapping
+# ===========================================================================
+
+class TestFlagSemantics:
+    """
+    Exhaustive tests for the three event flags.
+
+    Definitions
+    -----------
+    is_current        : start <= now < end
+    is_next           : first event with start >= current.end
+                        (or start >= now when no current); does NOT overlap current
+    is_next_overlapping: first event with start > current.start
+                         AND start < current.end  (runs concurrently with current)
+                         only set when there IS a current event
+    """
+
+    # ------------------------------------------------------------------
+    # is_current
+    # ------------------------------------------------------------------
+
+    def test_current_starts_exactly_at_now(self):
+        now = _make_dt(2025, 6, 15, 10, 0)
+        ics = _ics(_event("c", "C", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert events[0]["is_current"] is True
+
+    def test_current_ends_exactly_at_now_excluded(self):
+        now = _make_dt(2025, 6, 15, 11, 0)
+        ics = _ics(_event("c", "C", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert events[0]["is_current"] is False
+
+    def test_current_in_middle_of_event(self):
+        now = _make_dt(2025, 6, 15, 10, 30)
+        ics = _ics(_event("c", "C", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert events[0]["is_current"] is True
+
+    def test_no_current_all_future(self):
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = _ics(_event("c", "C", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert not any(e["is_current"] for e in events)
+
+    def test_no_current_all_past(self):
+        now = _make_dt(2025, 6, 15, 14, 0)
+        ics = _ics(_event("c", "C", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert not any(e["is_current"] for e in events)
+
+    def test_only_one_current_at_a_time(self):
+        """Even with overlapping events, only the first (by start) is current."""
+        now = _make_dt(2025, 6, 15, 10, 15)
+        ics = _ics(
+            _event("a", "A", "20250615T100000Z", "20250615T110000Z"),
+            _event("b", "B", "20250615T100000Z", "20250615T113000Z"),
+        )
+        events = _result([ics], now)
+        current = [e for e in events if e["is_current"]]
+        assert len(current) == 1
+
+    # ------------------------------------------------------------------
+    # is_next — no current event
+    # ------------------------------------------------------------------
+
+    def test_next_is_first_future_when_no_current(self):
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = _ics(
+            _event("a", "A", "20250615T100000Z", "20250615T110000Z"),
+            _event("b", "B", "20250615T120000Z", "20250615T130000Z"),
+        )
+        events = _result([ics], now)
+        nxt = [e for e in events if e["is_next"]]
+        assert len(nxt) == 1
+        assert nxt[0]["summary"] == "A"
+
+    def test_next_skips_past_events_when_no_current(self):
+        now = _make_dt(2025, 6, 15, 11, 30)
+        ics = _ics(
+            _event("a", "A", "20250615T100000Z", "20250615T110000Z"),  # past
+            _event("b", "B", "20250615T120000Z", "20250615T130000Z"),  # future
+        )
+        events = _result([ics], now)
+        nxt = [e for e in events if e["is_next"]]
+        assert len(nxt) == 1
+        assert nxt[0]["summary"] == "B"
+
+    def test_no_next_when_all_past_and_no_current(self):
+        now = _make_dt(2025, 6, 15, 20, 0)
+        ics = _ics(_event("a", "A", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert not any(e["is_next"] for e in events)
+
+    # ------------------------------------------------------------------
+    # is_next — with current event
+    # ------------------------------------------------------------------
+
+    def test_next_is_after_current_ends_not_after_now(self):
+        """
+        Current 10:00-11:00, Gap event 10:30-10:45 (inside current), Next 11:30.
+        NOW=10:20 → next must be 11:30, not 10:30.
+        """
+        now = _make_dt(2025, 6, 15, 10, 20)
+        ics = _ics(
+            _event("cur", "Current",  "20250615T100000Z", "20250615T110000Z"),
+            _event("gap", "During",   "20250615T103000Z", "20250615T104500Z"),
+            _event("nxt", "Next",     "20250615T113000Z", "20250615T120000Z"),
+        )
+        events = _result([ics], now)
+        nxt = [e for e in events if e["is_next"]]
+        assert len(nxt) == 1
+        assert nxt[0]["summary"] == "Next"
+
+    def test_next_starts_exactly_at_current_end(self):
+        """Event starting exactly when current ends → is_next."""
+        now = _make_dt(2025, 6, 15, 10, 30)
+        ics = _ics(
+            _event("cur", "Current", "20250615T100000Z", "20250615T110000Z"),
+            _event("nxt", "Next",    "20250615T110000Z", "20250615T120000Z"),
+        )
+        events = _result([ics], now)
+        nxt = [e for e in events if e["is_next"]]
+        assert len(nxt) == 1
+        assert nxt[0]["summary"] == "Next"
+
+    def test_next_ignores_current_event_itself(self):
+        """is_next must not point to the current event."""
+        now = _make_dt(2025, 6, 15, 10, 30)
+        ics = _ics(
+            _event("cur", "Current", "20250615T100000Z", "20250615T110000Z"),
+            _event("nxt", "Next",    "20250615T113000Z", "20250615T120000Z"),
+        )
+        events = _result([ics], now)
+        cur = next(e for e in events if e["is_current"])
+        nxt = [e for e in events if e["is_next"]]
+        assert cur["summary"] == "Current"
+        assert len(nxt) == 1 and nxt[0]["summary"] == "Next"
+
+    def test_next_is_none_when_nothing_after_current(self):
+        now = _make_dt(2025, 6, 15, 10, 30)
+        ics = _ics(_event("cur", "Only", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        assert not any(e["is_next"] for e in events)
+
+    def test_only_one_next(self):
+        now = _make_dt(2025, 6, 15, 10, 30)
+        ics = _ics(
+            _event("cur", "Current", "20250615T100000Z", "20250615T110000Z"),
+            _event("n1",  "Next1",   "20250615T113000Z", "20250615T120000Z"),
+            _event("n2",  "Next2",   "20250615T120000Z", "20250615T130000Z"),
+        )
+        events = _result([ics], now)
+        nxt = [e for e in events if e["is_next"]]
+        assert len(nxt) == 1
+        assert nxt[0]["summary"] == "Next1"
+
+    # ------------------------------------------------------------------
+    # is_next_overlapping
+    # ------------------------------------------------------------------
+
+    def test_next_overlapping_basic(self):
+        """
+        Current 10:00-11:00. B starts at 10:30 (inside current) → overlapping.
+        """
+        now = _make_dt(2025, 6, 15, 10, 15)
+        ics = _ics(
+            _event("cur", "Current",     "20250615T100000Z", "20250615T110000Z"),
+            _event("ov",  "Overlapping", "20250615T103000Z", "20250615T113000Z"),
+        )
+        events = _result([ics], now)
+        ov = [e for e in events if e["is_next_overlapping"]]
+        assert len(ov) == 1
+        assert ov[0]["summary"] == "Overlapping"
+
+    def test_next_overlapping_is_first_concurrent(self):
+        """When multiple events overlap current, only the first (earliest start) is flagged."""
+        now = _make_dt(2025, 6, 15, 10, 15)
+        ics = _ics(
+            _event("cur", "Current", "20250615T100000Z", "20250615T110000Z"),
+            _event("ov1", "Ov1",     "20250615T103000Z", "20250615T113000Z"),
+            _event("ov2", "Ov2",     "20250615T104500Z", "20250615T113000Z"),
+        )
+        events = _result([ics], now)
+        ov = [e for e in events if e["is_next_overlapping"]]
+        assert len(ov) == 1
+        assert ov[0]["summary"] == "Ov1"
+
+    def test_next_overlapping_absent_when_no_current(self):
+        """No current event → is_next_overlapping must never be set."""
+        now = _make_dt(2025, 6, 15, 9, 0)
+        ics = _ics(
+            _event("a", "A", "20250615T100000Z", "20250615T110000Z"),
+            _event("b", "B", "20250615T103000Z", "20250615T113000Z"),
+        )
+        events = _result([ics], now)
+        assert not any(e["is_next_overlapping"] for e in events)
+
+    def test_next_overlapping_absent_when_events_sequential(self):
+        """Current 10:00-11:00, next 11:00 → sequential, not overlapping."""
+        now = _make_dt(2025, 6, 15, 10, 30)
+        ics = _ics(
+            _event("cur", "Current", "20250615T100000Z", "20250615T110000Z"),
+            _event("nxt", "Next",    "20250615T110000Z", "20250615T120000Z"),
+        )
+        events = _result([ics], now)
+        assert not any(e["is_next_overlapping"] for e in events)
+
+    def test_next_overlapping_event_starts_after_current_starts(self):
+        """Event that starts at same time as current is NOT overlapping (start == current.start)."""
+        now = _make_dt(2025, 6, 15, 10, 15)
+        ics = _ics(
+            _event("cur", "Current", "20250615T100000Z", "20250615T110000Z"),
+            _event("sim", "Same",    "20250615T100000Z", "20250615T113000Z"),
+        )
+        events = _result([ics], now)
+        # "Same" starts at exactly current.start → not next_overlapping
+        assert not any(e["is_next_overlapping"] and e["summary"] == "Same" for e in events)
+
+    def test_next_and_overlapping_coexist(self):
+        """
+        Current 10:00-11:00, Overlapping 10:30-11:30, Next 12:00-13:00.
+        All three flags set simultaneously.
+        """
+        now = _make_dt(2025, 6, 15, 10, 15)
+        ics = _ics(
+            _event("cur", "Current",     "20250615T100000Z", "20250615T110000Z"),
+            _event("ov",  "Overlapping", "20250615T103000Z", "20250615T113000Z"),
+            _event("nxt", "Next",        "20250615T120000Z", "20250615T130000Z"),
+        )
+        events = _result([ics], now)
+        by = {e["summary"]: e for e in events}
+        assert by["Current"]["is_current"] is True
+        assert by["Overlapping"]["is_next_overlapping"] is True
+        assert by["Next"]["is_next"] is True
+        # Verify mutual exclusivity
+        assert by["Current"]["is_next"] is False
+        assert by["Current"]["is_next_overlapping"] is False
+        assert by["Overlapping"]["is_current"] is False
+        assert by["Overlapping"]["is_next"] is False
+        assert by["Next"]["is_current"] is False
+        assert by["Next"]["is_next_overlapping"] is False
+
+    def test_flags_all_false_when_single_past_event(self):
+        now = _make_dt(2025, 6, 15, 14, 0)
+        ics = _ics(_event("a", "Past", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now)
+        e = events[0]
+        assert e["is_current"] is False
+        assert e["is_next"] is False
+        assert e["is_next_overlapping"] is False
+
+    def test_now_override_drives_flags_independent_of_target_date(self):
+        """
+        target_date=today but now_override=tomorrow → all flags False
+        (events are on target_date which is in the past relative to now).
+        """
+        now = _make_dt(2025, 6, 16, 10, 30)  # tomorrow
+        ics = _ics(_event("a", "A", "20250615T100000Z", "20250615T110000Z"))
+        events = _result([ics], now, target_date=date(2025, 6, 15))
+        e = events[0]
+        assert e["is_current"] is False
+        assert e["is_next"] is False
+
+
+# ===========================================================================
+# M. target_date as datetime — "now" derived from it
+# ===========================================================================
+
+class TestTargetDateAsDatetime:
+    """
+    When target_date is passed as a datetime (not just date),
+    that datetime is used as both the day window AND as "now" for flag logic.
+    This is the main real-world usage pattern.
+    """
+
+    def test_next_found_when_target_date_is_datetime_before_events(self):
+        """
+        target_date=datetime(06:00), event at 09:00-10:00.
+        now derived from target_date = 06:00 → event is in the future → is_next.
+        """
+        import pytz
+        tz = pytz.timezone("Asia/Nicosia")  # UTC+2
+        # 2026-03-04 06:00 Nicosia = 04:00 UTC
+        target_dt = datetime(2026, 3, 4, 6, 0, 0, tzinfo=tz)
+        ics = _ics(_event("a", "Meeting", "20260304T070000Z", "20260304T080000Z"))  # 09:00 Nicosia
+        contents = [ics.encode()]
+        events = get_events_for_day(
+            calendar_urls=["mock://cal0.ics"],
+            user_timezone="Asia/Nicosia",
+            target_date=target_dt,
+            ics_contents=contents,
+        )
+        nxt = [e for e in events if e["is_next"]]
+        assert len(nxt) == 1
+        assert nxt[0]["summary"] == "Meeting"
+
+    def test_current_found_when_target_date_datetime_inside_event(self):
+        """
+        target_date=datetime(09:30 Nicosia), event 09:00-10:00 Nicosia.
+        now=09:30 → is_current.
+        """
+        import pytz
+        tz = pytz.timezone("Asia/Nicosia")
+        target_dt = datetime(2026, 3, 4, 9, 30, 0, tzinfo=tz)
+        ics = _ics(_event("a", "Meeting", "20260304T070000Z", "20260304T080000Z"))  # 09:00-10:00 Nicosia
+        contents = [ics.encode()]
+        events = get_events_for_day(
+            calendar_urls=["mock://cal0.ics"],
+            user_timezone="Asia/Nicosia",
+            target_date=target_dt,
+            ics_contents=contents,
+        )
+        cur = [e for e in events if e["is_current"]]
+        assert len(cur) == 1
+
+    def test_no_next_when_target_datetime_is_after_all_events(self):
+        """
+        target_date=datetime(23:00), event 09:00-10:00.
+        now=23:00 → event is past → no is_next, no is_current.
+        """
+        import pytz
+        tz = pytz.timezone("Asia/Nicosia")
+        target_dt = datetime(2026, 3, 4, 23, 0, 0, tzinfo=tz)
+        ics = _ics(_event("a", "Meeting", "20260304T070000Z", "20260304T080000Z"))
+        contents = [ics.encode()]
+        events = get_events_for_day(
+            calendar_urls=["mock://cal0.ics"],
+            user_timezone="Asia/Nicosia",
+            target_date=target_dt,
+            ics_contents=contents,
+        )
+        assert not any(e["is_next"] for e in events)
+        assert not any(e["is_current"] for e in events)
+
+    def test_target_datetime_uses_correct_date_for_window(self):
+        """
+        target_date=datetime(2026-03-04 06:00) → window is March 4, not March 3.
+        Event on March 3 must not appear.
+        """
+        import pytz
+        tz = pytz.timezone("Asia/Nicosia")
+        target_dt = datetime(2026, 3, 4, 6, 0, 0, tzinfo=tz)
+        ics = _ics(
+            _event("a", "Yesterday", "20260303T100000Z", "20260303T110000Z"),
+            _event("b", "Today",     "20260304T100000Z", "20260304T110000Z"),
+        )
+        contents = [ics.encode()]
+        events = get_events_for_day(
+            calendar_urls=["mock://cal0.ics"],
+            user_timezone="Asia/Nicosia",
+            target_date=target_dt,
+            ics_contents=contents,
+        )
+        summaries = [e["summary"] for e in events]
+        assert "Today" in summaries
+        assert "Yesterday" not in summaries
+
+    def test_now_override_beats_target_datetime(self):
+        """
+        Even if target_date is a datetime, explicit now_override takes precedence.
+        """
+        import pytz
+        tz = pytz.timezone("Asia/Nicosia")
+        target_dt = datetime(2026, 3, 4, 6, 0, 0, tzinfo=tz)   # would set now=06:00
+        now_override = datetime(2026, 3, 4, 23, 0, 0, tzinfo=tz)  # after all events
+        ics = _ics(_event("a", "Meeting", "20260304T100000Z", "20260304T110000Z"))
+        contents = [ics.encode()]
+        events = get_events_for_day(
+            calendar_urls=["mock://cal0.ics"],
+            user_timezone="Asia/Nicosia",
+            target_date=target_dt,
+            ics_contents=contents,
+            now_override=now_override,
+        )
+        # now=23:00 → event is past, no next
+        assert not any(e["is_next"] for e in events)
