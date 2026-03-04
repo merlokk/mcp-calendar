@@ -1,6 +1,13 @@
 from icscal.calendar_loader  import get_events_for_day
 from datetime import date
 
+from icscal.windows_zones import configure, cache_info
+configure(
+    file_cache=True,
+    cache_path="./windows_zones.json",  # опционально
+    cache_ttl_seconds=86_400,           # 24ч по умолчанию
+)
+
 def main():
     events = get_events_for_day(
         calendar_urls=[
