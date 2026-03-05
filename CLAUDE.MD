@@ -22,6 +22,7 @@
 ## File Structure
 
 ```
+main.py                  # Local runner for quick library testing with real URLs
 lambda_handler.py        # AWS Lambda entry point — param parsing, cache, response shaping
 lambda_run.py            # CLI wrapper for local testing of lambda_handler
 test-lambda.py           # Tests for lambda_handler only (library mocked)
