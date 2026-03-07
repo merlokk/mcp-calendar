@@ -6,6 +6,10 @@ FastMCP server exposing calendar data as tools for AI assistants.
 Environment variables
 ---------------------
 ICS_URLS        (required) space-separated .ics URLs
+CLOCKIFY_API_KEY (optional) Clockify API key for get_clockify_tasks
+CLOCKIFY_BASE_URL (optional) Clockify API base URL, default https://api.clockify.me/api
+CLOCKIFY_WORKSPACE_ID (optional) override workspace id for Clockify
+CLOCKIFY_USER_ID (optional) override user id for Clockify
 TZ              (optional) IANA timezone, default "Europe/Nicosia"
 CACHE_MS        (optional) in-memory cache TTL ms, default 60000
 OVERRIDE_NOW    (optional) ISO datetime to override "now" for testing
@@ -42,6 +46,11 @@ except ImportError:
     from calendar_loader import get_events_for_day          # type: ignore
     from windows_zones import configure as _wz_configure    # type: ignore
 
+try:
+    from clockifycal.loader import get_events_for_day as get_clockify_events_for_day
+except ImportError:
+    get_clockify_events_for_day = None  # type: ignore[assignment]
+
 # ---------------------------------------------------------------------------
 # Module-level setup
 # ---------------------------------------------------------------------------
@@ -53,7 +62,8 @@ mcp = FastMCP(
         "Provides access to the user's calendar. "
         "Use get_now to find what is happening right now and what comes next. "
         "Use get_day to see all events on a specific date. "
-        "Use get_free_slots to find open time on a specific date."
+        "Use get_free_slots to find open time on a specific date. "
+        "Use get_clockify_tasks to read Clockify time entries."
     ),
 )
 
@@ -126,6 +136,15 @@ def _cache_ms() -> int:
         return _CACHE_TTL_MS_DEFAULT
 
 
+def _clockify_config() -> dict[str, str]:
+    return {
+        "api_key": os.environ.get("CLOCKIFY_API_KEY", "").strip(),
+        "base_url": os.environ.get("CLOCKIFY_BASE_URL", "https://api.clockify.me/api").strip() or "https://api.clockify.me/api",
+        "workspace_id": os.environ.get("CLOCKIFY_WORKSPACE_ID", "").strip(),
+        "user_id": os.environ.get("CLOCKIFY_USER_ID", "").strip(),
+    }
+
+
 def _fetch_events(target: date, tz: pytz.BaseTzInfo,
                   now_utc: datetime) -> list[dict]:
     """Fetch (or return cached) events for a given date."""
@@ -167,6 +186,37 @@ def _minutes_until(now_utc: datetime, ev: Optional[dict]) -> Optional[int]:
         return None
     start_utc = datetime.fromisoformat(ev["start_iso"])
     return max(0, int((start_utc - now_utc).total_seconds() / 60))
+
+
+def _fetch_clockify_events(target: date, tz: pytz.BaseTzInfo,
+                           now_utc: datetime) -> list[dict]:
+    cfg = _clockify_config()
+    if not cfg["api_key"]:
+        raise ValueError("CLOCKIFY_API_KEY environment variable is not set")
+    if get_clockify_events_for_day is None:
+        raise RuntimeError("clockifycal is not available")
+
+    key = (
+        f"clockify|{tz.zone}|{target.isoformat()}|{cfg['base_url']}|"
+        f"{cfg['workspace_id']}|{cfg['user_id']}"
+    )
+    ttl = _cache_ms()
+
+    cached = _cache_get(key, ttl)
+    if cached is not None:
+        return cached
+
+    events = get_clockify_events_for_day(
+        api_key=cfg["api_key"],
+        user_timezone=tz.zone,
+        target_date=target,
+        now_override=now_utc,
+        base_url=cfg["base_url"],
+        workspace_id=cfg["workspace_id"] or None,
+        user_id=cfg["user_id"] or None,
+    )
+    _cache_set(key, events)
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -337,6 +387,39 @@ def get_free_slots(
         "minDuration":  min_duration,
         "freeSlots":    slots,
         "totalFreeMin": sum(s["duration_min"] for s in slots),
+    }
+
+
+@mcp.tool()
+def get_clockify_tasks(
+    date_str: Optional[str] = None,
+    override_now: Optional[str] = None,
+) -> dict:
+    """
+    Return Clockify tasks (time entries) for a given day.
+
+    Args:
+        date_str:     ISO date "YYYY-MM-DD". Defaults to today.
+        override_now: Optional ISO datetime to use as "now".
+    """
+    tz = _resolve_tz()
+    now_utc = _resolve_now(override_now)
+    target = _resolve_date(date_str, tz, now_utc)
+    events = _fetch_clockify_events(target, tz, now_utc)
+
+    window_start = tz.localize(datetime(target.year, target.month, target.day))
+    window_end = tz.normalize(window_start + timedelta(days=1))
+
+    return {
+        "source": "clockify",
+        "date": target.isoformat(),
+        "tz": tz.zone,
+        "window": {
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+        },
+        "count": len(events),
+        "tasks": [_fmt(e, tz) for e in events],
     }
 
 
