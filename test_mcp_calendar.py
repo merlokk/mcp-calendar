@@ -96,3 +96,84 @@ def test_get_clockify_tasks_uses_cache(monkeypatch):
         srv.get_clockify_tasks(date_str="2026-03-06", override_now="2026-03-06T08:05:00Z")
 
     assert calls["n"] == 1
+
+
+def test_get_clockify_free_slots_returns_local_slots(monkeypatch):
+    srv._cache.clear()
+
+    def fake_slots_loader(**kwargs):
+        assert kwargs["api_key"] == "key-1"
+        return [
+            {
+                "start_iso": "2026-03-06T10:00:00+00:00",
+                "end_iso": "2026-03-06T11:00:00+00:00",
+                "duration_min": 60,
+            }
+        ]
+
+    monkeypatch.setattr(srv, "get_clockify_free_slots_for_day", fake_slots_loader)
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CLOCKIFY_API_KEY": "key-1",
+            "TZ": "Europe/Kyiv",
+        },
+        clear=False,
+    ):
+        data = srv.get_clockify_free_slots(date_str="2026-03-06", override_now="2026-03-06T08:00:00Z")
+
+    assert data["source"] == "clockify"
+    assert data["count"] == 1
+    assert data["totalFreeMin"] == 60
+    assert data["freeSlots"][0]["start"].endswith("+02:00")
+
+
+def test_get_clockify_free_slots_requires_api_key(monkeypatch):
+    srv._cache.clear()
+    monkeypatch.setattr(srv, "get_clockify_free_slots_for_day", lambda **kwargs: [])
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CLOCKIFY_API_KEY": "",
+            "TZ": "UTC",
+        },
+        clear=False,
+    ):
+        try:
+            srv.get_clockify_free_slots(date_str="2026-03-06", override_now="2026-03-06T08:00:00Z")
+            assert False, "Expected ValueError"
+        except ValueError as exc:
+            assert "CLOCKIFY_API_KEY" in str(exc)
+
+
+def test_get_clockify_free_slots_uses_cache(monkeypatch):
+    srv._cache.clear()
+    calls = {"n": 0}
+
+    def fake_slots_loader(**kwargs):
+        calls["n"] += 1
+        return [
+            {
+                "start_iso": "2026-03-06T10:00:00+00:00",
+                "end_iso": "2026-03-06T11:00:00+00:00",
+                "duration_min": 60,
+            }
+        ]
+
+    monkeypatch.setattr(srv, "get_clockify_free_slots_for_day", fake_slots_loader)
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CLOCKIFY_API_KEY": "key-1",
+            "TZ": "UTC",
+            "CACHE_MS": "60000",
+        },
+        clear=False,
+    ):
+        srv.get_clockify_free_slots(date_str="2026-03-06", override_now="2026-03-06T08:00:00Z")
+        srv.get_clockify_free_slots(date_str="2026-03-06", override_now="2026-03-06T08:05:00Z")
+
+    assert calls["n"] == 1

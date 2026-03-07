@@ -44,6 +44,7 @@ Available tools:
 - `get_day`
 - `get_free_slots`
 - `get_clockify_tasks`
+- `get_clockify_free_slots`
 
 Run MCP server:
 
@@ -58,6 +59,7 @@ python run-mcp.py get_now
 python run-mcp.py get_day --date 2026-03-06
 python run-mcp.py get_free_slots --date 2026-03-06 --min-duration 30
 python run-mcp.py get_clockify_tasks --date 2026-03-06
+python run-mcp.py get_clockify_free_slots --date 2026-03-06
 ```
 
 ## Environment variables

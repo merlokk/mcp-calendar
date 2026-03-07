@@ -19,6 +19,7 @@ Usage
   python run_mcp.py get_free_slots --day-start 10:00 --day-end 19:00
 
   python run_mcp.py get_clockify_tasks --date 2026-02-13
+  python run_mcp.py get_clockify_free_slots --date 2026-02-13
 
   # pipe into jq
   python run_mcp.py get_now | jq .current
@@ -34,7 +35,7 @@ import sys
 # Ensure the script's own directory is first so we load the local mcp_calendar.py
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-from mcp_calendar import get_now, get_day, get_free_slots, get_clockify_tasks  # noqa: E402
+from mcp_calendar import get_now, get_day, get_free_slots, get_clockify_tasks, get_clockify_free_slots  # noqa: E402
 
 
 def _print(data: dict) -> None:
@@ -47,7 +48,7 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("tool", choices=["get_now", "get_day", "get_free_slots", "get_clockify_tasks"],
+    p.add_argument("tool", choices=["get_now", "get_day", "get_free_slots", "get_clockify_tasks", "get_clockify_free_slots"],
                    help="Tool to call")
 
     p.add_argument("--override-now", metavar="ISO",
@@ -92,6 +93,12 @@ def main() -> None:
 
         elif args.tool == "get_clockify_tasks":
             result = get_clockify_tasks(
+                date_str=args.date,
+                override_now=args.override_now,
+            )
+
+        elif args.tool == "get_clockify_free_slots":
+            result = get_clockify_free_slots(
                 date_str=args.date,
                 override_now=args.override_now,
             )

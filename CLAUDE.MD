@@ -11,7 +11,7 @@
 - pytest
 
 ## Key Files
-- `mcp_calendar.py`: MCP tools (`get_now`, `get_day`, `get_free_slots`, `get_clockify_tasks`)
+- `mcp_calendar.py`: MCP tools (`get_now`, `get_day`, `get_free_slots`, `get_clockify_tasks`, `get_clockify_free_slots`)
 - `run-mcp.py`: local CLI wrapper for MCP tools
 - `clockifycal/client.py`: Clockify API calls
 - `clockifycal/loader.py`: Clockify event transform + free-slot calculation
@@ -23,6 +23,7 @@
 - Run short list: `python -m clockifycal.cli --api-key <KEY> --date 2026-03-06 --list`
 - Run free slots: `python -m clockifycal.cli --api-key <KEY> --date 2026-03-06 --free-slots --pretty`
 - Run MCP helper: `python run-mcp.py get_clockify_tasks --date 2026-03-06`
+- Run MCP free slots: `python run-mcp.py get_clockify_free_slots --date 2026-03-06`
 - Tests: `pytest -q test_clockifycal.py` and `pytest -q test_mcp_calendar.py`
 
 ## Environment

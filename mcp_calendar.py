@@ -6,7 +6,7 @@ FastMCP server exposing calendar data as tools for AI assistants.
 Environment variables
 ---------------------
 ICS_URLS        (required) space-separated .ics URLs
-CLOCKIFY_API_KEY (optional) Clockify API key for get_clockify_tasks
+CLOCKIFY_API_KEY (optional) Clockify API key for get_clockify_tasks/get_clockify_free_slots
 CLOCKIFY_BASE_URL (optional) Clockify API base URL, default https://api.clockify.me/api
 CLOCKIFY_WORKSPACE_ID (optional) override workspace id for Clockify
 CLOCKIFY_USER_ID (optional) override user id for Clockify
@@ -27,6 +27,8 @@ Tools
   get_now          → current / next / next-overlapping event + minutesUntilNext
   get_day          → all events for today or a given date
   get_free_slots   → free time slots for today or a given date
+  get_clockify_tasks -> Clockify time entries for today or a given date
+  get_clockify_free_slots -> free slots from Clockify time entries
 """
 
 from __future__ import annotations
@@ -48,8 +50,10 @@ except ImportError:
 
 try:
     from clockifycal.loader import get_events_for_day as get_clockify_events_for_day
+    from clockifycal.loader import get_free_slots_for_day as get_clockify_free_slots_for_day
 except ImportError:
     get_clockify_events_for_day = None  # type: ignore[assignment]
+    get_clockify_free_slots_for_day = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Module-level setup
@@ -63,7 +67,8 @@ mcp = FastMCP(
         "Use get_now to find what is happening right now and what comes next. "
         "Use get_day to see all events on a specific date. "
         "Use get_free_slots to find open time on a specific date. "
-        "Use get_clockify_tasks to read Clockify time entries."
+        "Use get_clockify_tasks to read Clockify time entries. "
+        "Use get_clockify_free_slots to read free slots from Clockify time entries."
     ),
 )
 
@@ -217,6 +222,37 @@ def _fetch_clockify_events(target: date, tz: pytz.BaseTzInfo,
     )
     _cache_set(key, events)
     return events
+
+
+def _fetch_clockify_free_slots(target: date, tz: pytz.BaseTzInfo,
+                               now_utc: datetime) -> list[dict]:
+    cfg = _clockify_config()
+    if not cfg["api_key"]:
+        raise ValueError("CLOCKIFY_API_KEY environment variable is not set")
+    if get_clockify_free_slots_for_day is None:
+        raise RuntimeError("clockifycal is not available")
+
+    key = (
+        f"clockify-slots|{tz.zone}|{target.isoformat()}|{cfg['base_url']}|"
+        f"{cfg['workspace_id']}|{cfg['user_id']}"
+    )
+    ttl = _cache_ms()
+
+    cached = _cache_get(key, ttl)
+    if cached is not None:
+        return cached
+
+    slots = get_clockify_free_slots_for_day(
+        api_key=cfg["api_key"],
+        user_timezone=tz.zone,
+        target_date=target,
+        now_override=now_utc,
+        base_url=cfg["base_url"],
+        workspace_id=cfg["workspace_id"] or None,
+        user_id=cfg["user_id"] or None,
+    )
+    _cache_set(key, slots)
+    return slots
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +456,45 @@ def get_clockify_tasks(
         },
         "count": len(events),
         "tasks": [_fmt(e, tz) for e in events],
+    }
+
+
+@mcp.tool()
+def get_clockify_free_slots(
+    date_str: Optional[str] = None,
+    override_now: Optional[str] = None,
+) -> dict:
+    """
+    Return free slots computed from Clockify tasks for a given day.
+
+    Args:
+        date_str:     ISO date "YYYY-MM-DD". Defaults to today.
+        override_now: Optional ISO datetime to use as "now".
+    """
+    tz = _resolve_tz()
+    now_utc = _resolve_now(override_now)
+    target = _resolve_date(date_str, tz, now_utc)
+    slots = _fetch_clockify_free_slots(target, tz, now_utc)
+
+    output_slots: list[dict[str, Any]] = []
+    for slot in slots:
+        start = datetime.fromisoformat(slot["start_iso"]).astimezone(tz)
+        end = datetime.fromisoformat(slot["end_iso"]).astimezone(tz)
+        output_slots.append(
+            {
+                "start": start.isoformat(),
+                "end": end.isoformat(),
+                "duration_min": slot["duration_min"],
+            }
+        )
+
+    return {
+        "source": "clockify",
+        "date": target.isoformat(),
+        "tz": tz.zone,
+        "count": len(output_slots),
+        "freeSlots": output_slots,
+        "totalFreeMin": sum(s["duration_min"] for s in output_slots),
     }
 
 
