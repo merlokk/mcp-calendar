@@ -1,6 +1,10 @@
-# ICS Calendar Loader
+# mcp-calendar
 
-Loads multiple ICS calendars from URLs and returns a JSON array of events for a given day, with full timezone support for Google Calendar and Outlook/Exchange.
+Calendar and time-tracking toolkit with three layers:
+
+- `icscal`: load events from ICS URLs.
+- `clockifycal`: load Clockify time entries and compute free slots.
+- `mcp_calendar.py`: FastMCP server tools for assistants.
 
 ## Install
 
@@ -8,86 +12,77 @@ Loads multiple ICS calendars from URLs and returns a JSON array of events for a 
 pip install -r requirements.txt
 ```
 
-## Quick Start
+## Components
 
-```python
-from calendar_loader import get_events_for_day
+### 1) ICS loader (`icscal`)
 
-json_str = get_events_for_day(
-    calendar_urls=[
-        "https://calendar.google.com/calendar/ical/primary/public/basic.ics",
-        "https://outlook.office365.com/owa/calendar/.../calendar.ics",
-    ],
-    user_timezone="America/New_York",  # IANA or Windows tz name
-)
+Loads events from one or more public ICS URLs and returns normalized event dicts with flags:
 
-import json
-events = json.loads(json_str)
-for e in events:
-    print(e["summary"], e["start_iso"], "current:", e["is_current"])
-```
+- `is_current`
+- `is_next`
+- `is_next_overlapping`
 
-## Output JSON Schema
+### 2) Clockify adapter (`clockifycal`)
 
-Each event in the array:
+Loads time entries from Clockify API and returns the same event shape.
+Also supports free-slot calculation for a work day with lunch constraints.
 
-| Field | Type | Description |
-|---|---|---|
-| `uid` | str | Calendar UID |
-| `summary` | str | Event title |
-| `start_iso` | str | ISO 8601 start (UTC) |
-| `end_iso` | str | ISO 8601 end (UTC) |
-| `start_ms` | int | Start as Unix ms |
-| `end_ms` | int | End as Unix ms |
-| `calendar_url` | str | Source calendar URL |
-| `is_current` | bool | Happening right now |
-| `is_next` | bool | Next after current ends |
-| `is_next_overlapping` | bool | First event overlapping with next |
-| `is_next_non_overlapping` | bool | First event after overlapping cluster |
-
-## Run Tests
-
-```bash
-python -m pytest tests.py -v
-```
-
-## Clockify Adapter
-
-Added `clockifycal/` as a separate lightweight library (stdlib-only) to:
-- load current user: `GET https://api.clockify.me/api/v1/user`
-- load time entries: `GET /v1/workspaces/{workspaceId}/user/{userId}/time-entries`
-- convert entries to the same event shape used by `icscal`
-
-CLI:
+CLI examples:
 
 ```bash
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --pretty
+python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --list
+python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-slots --pretty
+python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-slots --list
 ```
 
-## Critical Implementation Details
+### 3) MCP server (`mcp_calendar.py`)
 
-### 1. Window Calculation
-- Window = `[midnight today, midnight tomorrow)` in user's timezone
-- Recurring events expanded from **windowStart** (not NOW) so early-morning events are included
+Available tools:
 
-### 2. Timezone Handling
-- Scans VTIMEZONE blocks in each ICS file first
-- **Does NOT remap** Windows TZ names (e.g. "Pacific Standard Time") that have a VTIMEZONE block
-- Only maps Windows→IANA when no VTIMEZONE block exists for that TZID
+- `get_now`
+- `get_day`
+- `get_free_slots`
+- `get_clockify_tasks`
 
-### 3. Recurring Event Duration
-- Duration = `master.end - master.start`
-- Applied to each occurrence: `occurrence.end = occurrence.start + duration`
-- Avoids the "stale end time" bug where all occurrences get the first occurrence's end
+Run MCP server:
 
-### 4. UID Priority
-- Multiple calendars: first URL in list wins for duplicate UIDs
-- Uses `calendar_index` for tie-breaking
+```bash
+ICS_URLS="https://example.com/a.ics" python mcp_calendar.py
+```
 
-### 5. Current/Next Logic
-- `current` = event where `start <= NOW < end`
-- `next` = first event where `start >= current.end` (not `start > NOW`)
+Run tools directly via helper CLI:
 
-### 6. Override (RECURRENCE-ID) Handling
-- **Used overrides**: replace the specific occurrence in the master series
-- **Orphaned overrides** (no master): included if they overlap the day window
+```bash
+python run-mcp.py get_now
+python run-mcp.py get_day --date 2026-03-06
+python run-mcp.py get_free_slots --date 2026-03-06 --min-duration 30
+python run-mcp.py get_clockify_tasks --date 2026-03-06
+```
+
+## Environment variables
+
+Shared:
+
+- `TZ` (optional, default `Europe/Nicosia`)
+- `CACHE_MS` (optional, default `60000`)
+- `OVERRIDE_NOW` (optional ISO datetime for tests/debug)
+
+ICS source:
+
+- `ICS_URLS` (required for ICS tools)
+
+Clockify source:
+
+- `CLOCKIFY_API_KEY` (required for Clockify API calls)
+- `CLOCKIFY_BASE_URL` (optional, default `https://api.clockify.me/api`)
+- `CLOCKIFY_WORKSPACE_ID` (optional override)
+- `CLOCKIFY_USER_ID` (optional override)
+
+## Tests
+
+```bash
+pytest -q test_clockifycal.py
+pytest -q test_mcp_calendar.py
+pytest -q test-lambda.py
+```

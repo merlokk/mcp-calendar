@@ -1,10 +1,22 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from clockifycal.loader import get_events_for_day
+from clockifycal.loader import (
+    LUNCH_BREAK_MINUTES,
+    LUNCH_WINDOW_START_HHMM,
+    MAX_FREE_SLOT_MINUTES,
+    WORKDAY_END_HHMM,
+    WORKDAY_START_HHMM,
+    get_events_for_day,
+    get_free_slots_for_day,
+)
+
+
+def _hhmm_to_iso(day: str, hhmm: str) -> str:
+    return f"{day}T{hhmm}:00+00:00"
 
 
 def test_loader_fetches_user_then_time_entries_and_transforms(monkeypatch):
@@ -153,6 +165,48 @@ def test_cli_prints_json(monkeypatch, capsys):
     assert '"uid": "te-1"' in captured.out
 
 
+def test_cli_prints_free_slots(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    def fake_slots_loader(**kwargs):
+        assert kwargs["api_key"] == "key-1"
+        return [{"start_iso": "2026-03-06T10:00:00+00:00", "end_iso": "2026-03-06T11:00:00+00:00", "duration_min": 60}]
+
+    monkeypatch.setattr("clockifycal.cli.get_free_slots_for_day", fake_slots_loader)
+
+    exit_code = main(["--api-key", "key-1", "--date", "2026-03-06", "--free-slots", "--pretty"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"duration_min": 60' in captured.out
+
+
+def test_cli_list_renders_in_requested_timezone(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    def fake_loader(**kwargs):
+        return [
+            {
+                "uid": "te-1",
+                "summary": "Task",
+                "start_iso": "2026-03-06T08:00:00+00:00",
+                "end_iso": "2026-03-06T09:00:00+00:00",
+                "is_current": False,
+                "is_next": True,
+                "is_next_overlapping": False,
+            }
+        ]
+
+    monkeypatch.setattr("clockifycal.cli.get_events_for_day", fake_loader)
+
+    exit_code = main(["--api-key", "key-1", "--tz", "Europe/Kyiv", "--date", "2026-03-06", "--list"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "2026-03-06T10:00:00+02:00" in captured.out
+    assert "2026-03-06T11:00:00+02:00" in captured.out
+
+
 def test_loader_raises_if_workspace_not_found():
     with pytest.raises(ValueError):
         get_events_for_day(
@@ -160,3 +214,83 @@ def test_loader_raises_if_workspace_not_found():
             user_payload={"id": "u1"},
             time_entries_payload=[],
         )
+
+
+def test_free_slots_split_by_max_one_hour():
+    day = "2026-03-06"
+    entries = [
+        {
+            "id": "te-1",
+            "description": "Morning",
+            "timeInterval": {"start": f"{day}T09:00:00Z", "end": _hhmm_to_iso(day, WORKDAY_START_HHMM).replace("+00:00", "Z")},
+        },
+        {
+            "id": "te-2",
+            "description": "Late",
+            "timeInterval": {"start": f"{day}T12:30:00Z", "end": _hhmm_to_iso(day, WORKDAY_END_HHMM).replace("+00:00", "Z")},
+        },
+    ]
+
+    slots = get_free_slots_for_day(
+        api_key="token",
+        user_timezone="UTC",
+        target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+        now_override="2026-03-06T08:00:00Z",
+        user_payload={"id": "u1", "defaultWorkspace": "w1"},
+        time_entries_payload=entries,
+    )
+
+    assert [s["duration_min"] for s in slots] == [MAX_FREE_SLOT_MINUTES, MAX_FREE_SLOT_MINUTES, 30]
+    assert slots[0]["start_iso"] == _hhmm_to_iso(day, WORKDAY_START_HHMM)
+    assert slots[-1]["end_iso"] == f"{day}T12:30:00+00:00"
+
+
+def test_free_slots_keeps_short_gap_as_single_interval():
+    day = "2026-03-06"
+    entries = [
+        {
+            "id": "te-1",
+            "description": "First",
+            "timeInterval": {"start": f"{day}T09:00:00Z", "end": _hhmm_to_iso(day, WORKDAY_START_HHMM).replace("+00:00", "Z")},
+        },
+        {
+            "id": "te-2",
+            "description": "Second",
+            "timeInterval": {"start": f"{day}T10:45:00Z", "end": _hhmm_to_iso(day, WORKDAY_END_HHMM).replace("+00:00", "Z")},
+        },
+    ]
+
+    slots = get_free_slots_for_day(
+        api_key="token",
+        user_timezone="UTC",
+        target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+        now_override="2026-03-06T08:00:00Z",
+        user_payload={"id": "u1", "defaultWorkspace": "w1"},
+        time_entries_payload=entries,
+    )
+
+    assert len(slots) == 1
+    assert slots[0]["duration_min"] == 45
+    assert slots[0]["start_iso"] == _hhmm_to_iso(day, WORKDAY_START_HHMM)
+    assert slots[0]["end_iso"] == f"{day}T10:45:00+00:00"
+
+
+def test_free_slots_reserve_lunch_break_when_it_fits():
+    day = "2026-03-06"
+    slots = get_free_slots_for_day(
+        api_key="token",
+        user_timezone="UTC",
+        target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+        now_override="2026-03-06T08:00:00Z",
+        user_payload={"id": "u1", "defaultWorkspace": "w1"},
+        time_entries_payload=[],
+    )
+
+    lunch_start = _hhmm_to_iso(day, LUNCH_WINDOW_START_HHMM)
+    lunch_start_dt = datetime.fromisoformat(lunch_start)
+    lunch_end_dt = lunch_start_dt + timedelta(minutes=LUNCH_BREAK_MINUTES)
+    lunch_end = lunch_end_dt.isoformat()
+
+    assert slots[0]["start_iso"] == _hhmm_to_iso(day, WORKDAY_START_HHMM)
+    assert any(s["end_iso"] == lunch_start for s in slots)
+    assert any(s["start_iso"] == lunch_end for s in slots)

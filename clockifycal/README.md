@@ -1,51 +1,87 @@
 # clockifycal
 
-`clockifycal` is a small module that loads time entries from Clockify and converts them into an event list (an `icscal`-like JSON shape).
+`clockifycal` is a stdlib-only Clockify adapter.
+It loads time entries and exposes:
 
-## What it does
+- event list for a day (`get_events_for_day`)
+- free slot list for a day (`get_free_slots_for_day`)
 
-- Fetches the current user via `GET /v1/user`.
-- Computes the day window in the selected timezone (`--tz` / `TZ`).
-- Loads the user's `time-entries` for that window.
-- Returns a sorted event list with flags:
-  - `is_current`: currently active event.
-  - `is_next`: next event after current one or after `now`.
-  - `is_next_overlapping`: next event that overlaps with the current one.
+## API calls used
+
+- `GET /v1/user`
+- `GET /v1/workspaces/{workspaceId}/user/{userId}/time-entries`
+
+Base URL default:
+
+- `https://api.clockify.me/api`
+
+## Main functions
+
+- `get_events_for_day(...)`: returns normalized events with flags (`is_current`, `is_next`, `is_next_overlapping`).
+- `get_free_slots_for_day(...)`: returns free intervals based on workday constants and current booked entries.
+
+## Free-slot rules
+
+Configured as constants in `loader.py`:
+
+- `WORKDAY_START_HHMM = "09:00"`
+- `WORKDAY_END_HHMM = "18:00"`
+- `LUNCH_WINDOW_START_HHMM = "13:00"`
+- `LUNCH_WINDOW_END_HHMM = "15:00"`
+- `LUNCH_BREAK_MINUTES = 30`
+- `MAX_FREE_SLOT_MINUTES = 60`
+
+Behavior:
+
+- Free time is calculated only inside workday bounds.
+- A 30-minute lunch break is reserved inside lunch window if a gap exists.
+- Any free gap longer than 60 minutes is split into 60-minute slots.
+- Any free gap shorter than 60 minutes is kept as one slot.
 
 ## CLI
 
-Run:
+Run as module (recommended):
 
 ```bash
 python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --tz Europe/Kyiv --pretty
 ```
 
-Short list view:
+Run as script:
 
 ```bash
-python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --tz Europe/Kyiv --date 2025-06-03 --list
+python clockifycal/cli.py --api-key <CLOCKIFY_API_KEY> --tz Europe/Kyiv --pretty
 ```
 
-Supported arguments:
+Short list output:
 
-- `--api-key` (or `CLOCKIFY_API_KEY` env var): Clockify API key.
-- `--tz` (or `TZ`): timezone used to compute the daily window.
-- `--date`: target date in `YYYY-MM-DD` format.
-- `--workspace-id`: workspace ID (optional; falls back to `defaultWorkspace`).
-- `--user-id`: user ID (optional; falls back to `/v1/user` response).
-- `--base-url`: API base URL (default: `https://api.clockify.me/api`).
-- `--now`: override current time (ISO 8601), useful for tests.
-- `--timeout`: HTTP timeout in seconds.
-- `--pretty`: pretty-print JSON output.
-- `--list`: print a short human-readable event list instead of JSON.
+```bash
+python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --list
+```
 
-`--list` output format:
+`--list` prints start/end in the timezone from `--tz` (or `TZ`).
 
-- `- <start_iso> -> <end_iso> | <summary>`
-- Optional markers: `[current | next | next-overlap]`.
+Free slots output (JSON):
 
-## Main modules
+```bash
+python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --free-slots --pretty
+```
 
-- `client.py`: HTTP client and `get_current_user`, `get_time_entries`.
-- `loader.py`: day-window logic and event building (`get_events_for_day`).
-- `cli.py`: command-line wrapper.
+Free slots short list:
+
+```bash
+python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --free-slots --list
+```
+
+Supported args:
+
+- `--api-key` (or env `CLOCKIFY_API_KEY`)
+- `--tz` (or env `TZ`)
+- `--date` (`YYYY-MM-DD`)
+- `--workspace-id`
+- `--user-id`
+- `--base-url`
+- `--now` (ISO 8601)
+- `--timeout`
+- `--pretty`
+- `--list`
+- `--free-slots`
