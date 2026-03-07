@@ -51,6 +51,19 @@ Each event in the array:
 python -m pytest tests.py -v
 ```
 
+## Clockify Adapter
+
+Added `clockifycal/` as a separate lightweight library (stdlib-only) to:
+- load current user: `GET https://api.clockify.me/api/v1/user`
+- load time entries: `GET /v1/workspaces/{workspaceId}/user/{userId}/time-entries`
+- convert entries to the same event shape used by `icscal`
+
+CLI:
+
+```bash
+python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --pretty
+```
+
 ## Critical Implementation Details
 
 ### 1. Window Calculation
