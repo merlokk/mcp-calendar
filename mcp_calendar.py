@@ -63,12 +63,9 @@ _wz_configure(file_cache=False)
 mcp = FastMCP(
     name="calendar",
     instructions=(
-        "Provides access to the user's calendar. "
-        "Use get_now to find what is happening right now and what comes next. "
-        "Use get_day to see all events on a specific date. "
-        "Use get_free_slots to find open time on a specific date. "
-        "Use get_clockify_tasks to read Clockify time entries. "
-        "Use get_clockify_free_slots to read free slots from Clockify time entries."
+        "Server purpose: read calendar events from ICS sources and read occupied time from Clockify. "
+        "Primary workflow is day-based: pick one target date and call tools for that date. "
+        "Use get_server_overview to get full tool descriptions and required parameters."
     ),
 )
 
@@ -495,6 +492,76 @@ def get_clockify_free_slots(
         "count": len(output_slots),
         "freeSlots": output_slots,
         "totalFreeMin": sum(s["duration_min"] for s in output_slots),
+    }
+
+
+@mcp.tool()
+def get_server_overview() -> dict:
+    """
+    Return server purpose, day-based workflow, and tool/parameter reference.
+    """
+    return {
+        "name": "calendar",
+        "purpose": (
+            "Server is designed to read calendar events from ICS sources and "
+            "occupied time in Clockify."
+        ),
+        "primaryWorkflow": (
+            "Work with one target day. Choose date_str (YYYY-MM-DD) and call "
+            "the corresponding day-based tools."
+        ),
+        "dayBased": True,
+        "tools": [
+            {
+                "name": "get_server_overview",
+                "description": "Return this reference: purpose, workflows, tools, parameters.",
+                "params": [],
+            },
+            {
+                "name": "get_now",
+                "description": "Current/next status for now based on ICS events for today's date.",
+                "params": [
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+            },
+            {
+                "name": "get_day",
+                "description": "All ICS events for a specific day.",
+                "params": [
+                    {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+            },
+            {
+                "name": "get_free_slots",
+                "description": "Free slots for a specific day from ICS events.",
+                "params": [
+                    {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
+                    {"name": "min_duration", "type": "int", "required": False, "default": 30},
+                    {"name": "day_start", "type": "string", "required": False, "default": "09:00"},
+                    {"name": "day_end", "type": "string", "required": False, "default": "18:00"},
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+            },
+            {
+                "name": "get_clockify_tasks",
+                "description": "Clockify occupied entries for a specific day.",
+                "params": [
+                    {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+                "envRequired": ["CLOCKIFY_API_KEY"],
+            },
+            {
+                "name": "get_clockify_free_slots",
+                "description": "Free slots for a specific day based on Clockify occupied entries.",
+                "params": [
+                    {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+                "envRequired": ["CLOCKIFY_API_KEY"],
+            },
+        ],
     }
 
 

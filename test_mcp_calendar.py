@@ -177,3 +177,23 @@ def test_get_clockify_free_slots_uses_cache(monkeypatch):
         srv.get_clockify_free_slots(date_str="2026-03-06", override_now="2026-03-06T08:05:00Z")
 
     assert calls["n"] == 1
+
+
+def test_get_server_overview_contains_purpose_and_tool_params():
+    data = srv.get_server_overview()
+
+    assert data["name"] == "calendar"
+    assert data["dayBased"] is True
+    assert "ICS" in data["purpose"]
+    assert "Clockify" in data["purpose"]
+    assert "target day" in data["primaryWorkflow"]
+    assert isinstance(data["tools"], list) and len(data["tools"]) >= 6
+
+    names = [tool["name"] for tool in data["tools"]]
+    assert "get_server_overview" in names
+    assert "get_day" in names
+    assert "get_clockify_tasks" in names
+    assert "get_clockify_free_slots" in names
+
+    day_tool = next(tool for tool in data["tools"] if tool["name"] == "get_day")
+    assert any(param["name"] == "date_str" for param in day_tool["params"])

@@ -38,8 +38,19 @@ python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-s
 
 ### 3) MCP server (`mcp_calendar.py`)
 
+Server purpose:
+
+- read calendar events from ICS sources
+- read occupied time and free slots from Clockify
+
+Primary workflow is day-based:
+
+- pick one target day (`date_str` in `YYYY-MM-DD`)
+- call relevant day tools for that day
+
 Available tools:
 
+- `get_server_overview` (returns purpose, workflow, tools, params)
 - `get_now`
 - `get_day`
 - `get_free_slots`
@@ -55,6 +66,7 @@ ICS_URLS="https://example.com/a.ics" python mcp_calendar.py
 Run tools directly via helper CLI:
 
 ```bash
+python run-mcp.py get_server_overview
 python run-mcp.py get_now
 python run-mcp.py get_day --date 2026-03-06
 python run-mcp.py get_free_slots --date 2026-03-06 --min-duration 30
