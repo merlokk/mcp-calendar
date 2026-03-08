@@ -62,6 +62,7 @@ python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --list
 ```
 
 `--list` prints start/end in the timezone from `--tz` (or `TZ`).
+If an entry has a Clockify project, `--list` also prints the project name.
 
 Free slots output (JSON):
 

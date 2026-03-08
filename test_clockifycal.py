@@ -199,6 +199,7 @@ def test_cli_list_renders_in_requested_timezone(monkeypatch, capsys):
         ]
 
     monkeypatch.setattr("clockifycal.cli.get_events_for_day", fake_loader)
+    monkeypatch.setattr("clockifycal.cli.get_project_names_for_day", lambda **kwargs: [])
 
     exit_code = main(["--api-key", "key-1", "--tz", "Europe/Kyiv", "--date", "2026-03-06", "--list"])
     captured = capsys.readouterr()
@@ -206,6 +207,36 @@ def test_cli_list_renders_in_requested_timezone(monkeypatch, capsys):
     assert exit_code == 0
     assert "2026-03-06T10:00:00+02:00" in captured.out
     assert "2026-03-06T11:00:00+02:00" in captured.out
+
+
+def test_cli_list_prints_project_name(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    def fake_loader(**kwargs):
+        return [
+            {
+                "uid": "te-1",
+                "summary": "Task",
+                "project_id": "p-1",
+                "start_iso": "2026-03-06T08:00:00+00:00",
+                "end_iso": "2026-03-06T09:00:00+00:00",
+                "is_current": False,
+                "is_next": True,
+                "is_next_overlapping": False,
+            }
+        ]
+
+    def fake_projects_loader(**kwargs):
+        return [{"project_id": "p-1", "project_name": "Internal"}]
+
+    monkeypatch.setattr("clockifycal.cli.get_events_for_day", fake_loader)
+    monkeypatch.setattr("clockifycal.cli.get_project_names_for_day", fake_projects_loader)
+
+    exit_code = main(["--api-key", "key-1", "--tz", "Europe/Kyiv", "--date", "2026-03-06", "--list"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert " | Internal" in captured.out
 
 
 def test_cli_prints_project_names(monkeypatch, capsys):

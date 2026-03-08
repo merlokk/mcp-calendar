@@ -54,7 +54,11 @@ def _to_local_iso(raw: object, tz: ZoneInfo) -> str:
     return dt.astimezone(tz).isoformat()
 
 
-def _print_short_list(events: list[dict[str, object]], tz_name: str) -> None:
+def _print_short_list(
+    events: list[dict[str, object]],
+    tz_name: str,
+    project_name_by_id: dict[str, str] | None = None,
+) -> None:
     if not events:
         print("No events")
         return
@@ -64,6 +68,10 @@ def _print_short_list(events: list[dict[str, object]], tz_name: str) -> None:
         start = _to_local_iso(event.get("start_iso"), out_tz)
         end = _to_local_iso(event.get("end_iso"), out_tz)
         summary = str(event.get("summary", "")).strip() or "Clockify Time Entry"
+        project_id = str(event.get("project_id", "")).strip()
+        project_name = ""
+        if project_id and project_name_by_id:
+            project_name = project_name_by_id.get(project_id, "").strip()
 
         flags: list[str] = []
         if event.get("is_current"):
@@ -74,7 +82,10 @@ def _print_short_list(events: list[dict[str, object]], tz_name: str) -> None:
             flags.append("next-overlap")
 
         suffix = f" [{' | '.join(flags)}]" if flags else ""
-        print(f"- {start} -> {end} | {summary}{suffix}")
+        if project_name:
+            print(f"- {start} -> {end} | {summary} | {project_name}{suffix}")
+        else:
+            print(f"- {start} -> {end} | {summary}{suffix}")
 
 
 def _print_short_free_slots(slots: list[dict[str, object]], tz_name: str) -> None:
@@ -152,7 +163,31 @@ def main(argv: list[str] | None = None) -> int:
         elif args.free_slots:
             _print_short_free_slots(output_data, args.tz)
         else:
-            _print_short_list(output_data, args.tz)
+            project_name_by_id: dict[str, str] = {}
+            project_ids = sorted(
+                {
+                    str(event.get("project_id", "")).strip()
+                    for event in output_data
+                    if str(event.get("project_id", "")).strip()
+                }
+            )
+            if project_ids:
+                projects = get_project_names_for_day(
+                    api_key=args.api_key,
+                    user_timezone=args.tz,
+                    target_date=target,
+                    now_override=args.now,
+                    base_url=args.base_url,
+                    workspace_id=args.workspace_id,
+                    user_id=args.user_id,
+                    timeout=args.timeout,
+                )
+                project_name_by_id = {
+                    str(project.get("project_id", "")).strip(): str(project.get("project_name", "")).strip()
+                    for project in projects
+                    if str(project.get("project_id", "")).strip()
+                }
+            _print_short_list(output_data, args.tz, project_name_by_id)
     elif args.pretty:
         print(json.dumps(output_data, ensure_ascii=False, indent=2))
     else:
