@@ -5,11 +5,13 @@ It loads time entries and exposes:
 
 - event list for a day (`get_events_for_day`)
 - free slot list for a day (`get_free_slots_for_day`)
+- project names for a day (`get_project_names_for_day`)
 
 ## API calls used
 
 - `GET /v1/user`
 - `GET /v1/workspaces/{workspaceId}/user/{userId}/time-entries`
+- `GET /v1/workspaces/{workspaceId}/projects/{projectId}`
 
 Base URL default:
 
@@ -19,6 +21,7 @@ Base URL default:
 
 - `get_events_for_day(...)`: returns normalized events with flags (`is_current`, `is_next`, `is_next_overlapping`).
 - `get_free_slots_for_day(...)`: returns free intervals based on workday constants and current booked entries.
+- `get_project_names_for_day(...)`: returns unique project names used by day entries.
 
 ## Free-slot rules
 
@@ -72,6 +75,12 @@ Free slots short list:
 python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --free-slots --list
 ```
 
+Project names:
+
+```bash
+python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --project-names --list
+```
+
 Supported args:
 
 - `--api-key` (or env `CLOCKIFY_API_KEY`)
@@ -85,3 +94,4 @@ Supported args:
 - `--pretty`
 - `--list`
 - `--free-slots`
+- `--project-names`

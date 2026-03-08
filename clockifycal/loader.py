@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .client import DEFAULT_BASE_URL, get_current_user, get_time_entries
+from .client import DEFAULT_BASE_URL, get_current_user, get_project, get_time_entries
 
 WORKDAY_START_HHMM = "10:00"
 WORKDAY_END_HHMM = "19:00"
@@ -196,6 +196,7 @@ def get_events_for_day(
                 "summary": summary,
                 "location": None,
                 "organizer": organizer,
+                "project_id": str(entry.get("projectId", "")).strip() or None,
                 "start": start_utc,
                 "end": end_utc,
                 "start_ms": int(start_utc.timestamp() * 1000),
@@ -241,6 +242,7 @@ def get_events_for_day(
                 "summary": ev["summary"],
                 "location": ev["location"],
                 "organizer": ev["organizer"],
+                "project_id": ev["project_id"],
                 "start_iso": ev["start"].isoformat(),
                 "end_iso": ev["end"].isoformat(),
                 "start_ms": ev["start_ms"],
@@ -378,3 +380,67 @@ def get_free_slots_for_day(
             )
 
     return free_slots
+
+
+def get_project_names_for_day(
+    *,
+    api_key: str,
+    user_timezone: str = "UTC",
+    target_date: Optional[date | datetime] = None,
+    now_override: Optional[datetime | str] = None,
+    base_url: str = DEFAULT_BASE_URL,
+    workspace_id: str | None = None,
+    user_id: str | None = None,
+    timeout: int = 15,
+    user_payload: Optional[dict[str, Any]] = None,
+    time_entries_payload: Optional[list[dict[str, Any]]] = None,
+    project_payloads: Optional[dict[str, dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    events = get_events_for_day(
+        api_key=api_key,
+        user_timezone=user_timezone,
+        target_date=target_date,
+        now_override=now_override,
+        base_url=base_url,
+        workspace_id=workspace_id,
+        user_id=user_id,
+        timeout=timeout,
+        user_payload=user_payload,
+        time_entries_payload=time_entries_payload,
+    )
+    if not events:
+        return []
+
+    workspace = workspace_id
+    if not workspace:
+        first_calendar = str(events[0].get("calendar_id", "")).strip()
+        workspace = first_calendar or None
+    if not workspace:
+        return []
+
+    project_ids = sorted(
+        {
+            str(ev.get("project_id", "")).strip()
+            for ev in events
+            if str(ev.get("project_id", "")).strip()
+        }
+    )
+    if not project_ids:
+        return []
+
+    out: list[dict[str, Any]] = []
+    lookup = project_payloads or {}
+    for project_id in project_ids:
+        payload = lookup.get(project_id)
+        if payload is None:
+            payload = get_project(
+                api_key=api_key,
+                workspace_id=workspace,
+                project_id=project_id,
+                base_url=base_url,
+                timeout=timeout,
+            )
+        name = str(payload.get("name", "")).strip() or project_id
+        out.append({"project_id": project_id, "project_name": name})
+
+    return out

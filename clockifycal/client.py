@@ -76,3 +76,24 @@ def get_time_entries(
     if not isinstance(payload, list):
         raise ClockifyAPIError("Unexpected time-entries response shape")
     return [entry for entry in payload if isinstance(entry, dict)]
+
+
+def get_project(
+    api_key: str,
+    workspace_id: str,
+    project_id: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = 15,
+) -> dict[str, Any]:
+    if not workspace_id:
+        raise ValueError("workspace_id is required")
+    if not project_id:
+        raise ValueError("project_id is required")
+
+    path = f"/v1/workspaces/{workspace_id}/projects/{project_id}"
+    url = f"{base_url.rstrip('/')}{path}"
+    payload = _http_get_json(url, api_key=api_key, timeout=timeout)
+    if not isinstance(payload, dict):
+        raise ClockifyAPIError("Unexpected project response shape")
+    return payload

@@ -12,6 +12,7 @@ from clockifycal.loader import (
     WORKDAY_START_HHMM,
     get_events_for_day,
     get_free_slots_for_day,
+    get_project_names_for_day,
 )
 
 
@@ -207,6 +208,22 @@ def test_cli_list_renders_in_requested_timezone(monkeypatch, capsys):
     assert "2026-03-06T11:00:00+02:00" in captured.out
 
 
+def test_cli_prints_project_names(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    def fake_projects_loader(**kwargs):
+        assert kwargs["api_key"] == "key-1"
+        return [{"project_id": "p-1", "project_name": "Internal"}]
+
+    monkeypatch.setattr("clockifycal.cli.get_project_names_for_day", fake_projects_loader)
+
+    exit_code = main(["--api-key", "key-1", "--date", "2026-03-06", "--project-names", "--list"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Internal (p-1)" in captured.out
+
+
 def test_loader_raises_if_workspace_not_found():
     with pytest.raises(ValueError):
         get_events_for_day(
@@ -214,6 +231,46 @@ def test_loader_raises_if_workspace_not_found():
             user_payload={"id": "u1"},
             time_entries_payload=[],
         )
+
+
+def test_project_names_for_day_resolves_project_names(monkeypatch):
+    entries = [
+        {
+            "id": "te-1",
+            "description": "A",
+            "projectId": "p-1",
+            "timeInterval": {"start": "2026-03-06T10:00:00Z", "end": "2026-03-06T11:00:00Z"},
+        },
+        {
+            "id": "te-2",
+            "description": "B",
+            "projectId": "p-2",
+            "timeInterval": {"start": "2026-03-06T11:00:00Z", "end": "2026-03-06T12:00:00Z"},
+        },
+    ]
+    calls: list[str] = []
+
+    def fake_get_project(*, api_key, workspace_id, project_id, base_url, timeout):
+        calls.append(project_id)
+        return {"id": project_id, "name": f"Project {project_id}"}
+
+    monkeypatch.setattr("clockifycal.loader.get_project", fake_get_project)
+
+    projects = get_project_names_for_day(
+        api_key="token",
+        user_timezone="UTC",
+        target_date=datetime(2026, 3, 6, 12, 0, tzinfo=timezone.utc),
+        now_override="2026-03-06T12:00:00Z",
+        workspace_id="w1",
+        user_payload={"id": "u1", "defaultWorkspace": "w1"},
+        time_entries_payload=entries,
+    )
+
+    assert calls == ["p-1", "p-2"]
+    assert projects == [
+        {"project_id": "p-1", "project_name": "Project p-1"},
+        {"project_id": "p-2", "project_name": "Project p-2"},
+    ]
 
 
 def test_free_slots_split_by_max_one_hour():

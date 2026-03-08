@@ -12,10 +12,10 @@ if __package__ in (None, ""):
     # Allow direct execution: `python clockifycal/cli.py`
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from clockifycal.client import ClockifyAPIError
-    from clockifycal.loader import get_events_for_day, get_free_slots_for_day
+    from clockifycal.loader import get_events_for_day, get_free_slots_for_day, get_project_names_for_day
 else:
     from .client import ClockifyAPIError
-    from .loader import get_events_for_day, get_free_slots_for_day
+    from .loader import get_events_for_day, get_free_slots_for_day, get_project_names_for_day
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -31,6 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--pretty", action="store_true")
     parser.add_argument("--list", dest="short_list", action="store_true", help="Print a short event list")
     parser.add_argument("--free-slots", action="store_true", help="Return free slots instead of events")
+    parser.add_argument("--project-names", action="store_true", help="Return Clockify project names for the selected day")
     return parser
 
 
@@ -89,6 +90,16 @@ def _print_short_free_slots(slots: list[dict[str, object]], tz_name: str) -> Non
         print(f"- {start} -> {end} | {duration} min")
 
 
+def _print_short_project_names(projects: list[dict[str, object]]) -> None:
+    if not projects:
+        print("No projects")
+        return
+    for project in projects:
+        project_id = str(project.get("project_id", "")).strip()
+        name = str(project.get("project_name", "")).strip() or project_id
+        print(f"- {name} ({project_id})")
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.api_key:
@@ -98,7 +109,18 @@ def main(argv: list[str] | None = None) -> int:
     target = date.fromisoformat(args.target_date) if args.target_date else None
 
     try:
-        if args.free_slots:
+        if args.project_names:
+            output_data = get_project_names_for_day(
+                api_key=args.api_key,
+                user_timezone=args.tz,
+                target_date=target,
+                now_override=args.now,
+                base_url=args.base_url,
+                workspace_id=args.workspace_id,
+                user_id=args.user_id,
+                timeout=args.timeout,
+            )
+        elif args.free_slots:
             output_data = get_free_slots_for_day(
                 api_key=args.api_key,
                 user_timezone=args.tz,
@@ -125,7 +147,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.short_list:
-        if args.free_slots:
+        if args.project_names:
+            _print_short_project_names(output_data)
+        elif args.free_slots:
             _print_short_free_slots(output_data, args.tz)
         else:
             _print_short_list(output_data, args.tz)
