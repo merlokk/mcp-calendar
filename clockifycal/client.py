@@ -103,15 +103,33 @@ def get_workspace_users(
     api_key: str,
     workspace_id: str,
     *,
+    page_size: int = 200,
+    max_pages: int = 200,
     base_url: str = DEFAULT_BASE_URL,
     timeout: int = 15,
 ) -> list[dict[str, Any]]:
     if not workspace_id:
         raise ValueError("workspace_id is required")
+    if page_size <= 0:
+        raise ValueError("page_size must be > 0")
+    if max_pages <= 0:
+        raise ValueError("max_pages must be > 0")
 
     path = f"/v1/workspaces/{workspace_id}/users"
-    url = f"{base_url.rstrip('/')}{path}"
-    payload = _http_get_json(url, api_key=api_key, timeout=timeout)
-    if not isinstance(payload, list):
-        raise ClockifyAPIError("Unexpected workspace users response shape")
-    return [user for user in payload if isinstance(user, dict)]
+    root_url = f"{base_url.rstrip('/')}{path}"
+    out: list[dict[str, Any]] = []
+
+    for page in range(1, max_pages + 1):
+        query = urllib.parse.urlencode({"page": page, "page-size": page_size})
+        url = f"{root_url}?{query}"
+        payload = _http_get_json(url, api_key=api_key, timeout=timeout)
+        if not isinstance(payload, list):
+            raise ClockifyAPIError("Unexpected workspace users response shape")
+        page_users = [user for user in payload if isinstance(user, dict)]
+        if not page_users:
+            break
+        out.extend(page_users)
+        if len(payload) < page_size:
+            break
+
+    return out

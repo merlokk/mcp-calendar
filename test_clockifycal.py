@@ -6,6 +6,7 @@ from uuid import uuid4
 
 import pytest
 
+from clockifycal.client import get_workspace_users
 from clockifycal.loader import (
     LUNCH_BREAK_MINUTES,
     LUNCH_WINDOW_START_HHMM,
@@ -524,3 +525,33 @@ def test_free_slots_reserve_lunch_break_when_it_fits():
     assert slots[0]["start_iso"] == _hhmm_to_iso(day, WORKDAY_START_HHMM)
     assert any(s["end_iso"] == lunch_start for s in slots)
     assert any(s["start_iso"] == lunch_end for s in slots)
+
+
+def test_client_get_workspace_users_fetches_all_pages(monkeypatch):
+    calls: list[str] = []
+
+    def fake_http_get_json(url: str, api_key: str, timeout: int = 15):
+        calls.append(url)
+        if "page=1" in url:
+            return [{"id": "u-1"}, {"id": "u-2"}]
+        if "page=2" in url:
+            return [{"id": "u-3"}]
+        return []
+
+    monkeypatch.setattr("clockifycal.client._http_get_json", fake_http_get_json)
+
+    users = get_workspace_users(
+        api_key="token",
+        workspace_id="w1",
+        base_url="https://api.clockify.me/api",
+        page_size=2,
+    )
+
+    assert [u["id"] for u in users] == ["u-1", "u-2", "u-3"]
+    assert any("page=1" in url and "page-size=2" in url for url in calls)
+    assert any("page=2" in url and "page-size=2" in url for url in calls)
+
+
+def test_client_get_workspace_users_validates_page_size():
+    with pytest.raises(ValueError):
+        get_workspace_users(api_key="token", workspace_id="w1", page_size=0)
