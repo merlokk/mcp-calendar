@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+import asyncio
+from pathlib import Path
 from unittest.mock import patch
 
 import mcp_calendar as srv
+from fastmcp import Client
 
 
 def _clockify_event(uid: str, summary: str, start_iso: str, end_iso: str) -> dict:
@@ -197,3 +200,26 @@ def test_get_server_overview_contains_purpose_and_tool_params():
 
     day_tool = next(tool for tool in data["tools"] if tool["name"] == "get_day")
     assert any(param["name"] == "date_str" for param in day_tool["params"])
+
+
+def test_mcp_stdio_transport_lists_tools_and_calls_tool():
+    async def _run() -> None:
+        server_path = Path(__file__).with_name("mcp_calendar.py")
+        async with Client(server_path, timeout=20) as client:
+            tools = await client.list_tools()
+            names = {tool.name for tool in tools}
+            assert {
+                "get_now",
+                "get_day",
+                "get_free_slots",
+                "get_clockify_tasks",
+                "get_clockify_free_slots",
+                "get_server_overview",
+            }.issubset(names)
+
+            result = await client.call_tool("get_server_overview", {})
+            assert result.is_error is False
+            assert result.data["name"] == "calendar"
+            assert result.data["dayBased"] is True
+
+    asyncio.run(_run())
