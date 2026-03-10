@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
+from uuid import uuid4
 
 import pytest
 
@@ -10,6 +12,7 @@ from clockifycal.loader import (
     MAX_FREE_SLOT_MINUTES,
     WORKDAY_END_HHMM,
     WORKDAY_START_HHMM,
+    get_employee_events_for_day,
     get_events_for_day,
     get_free_slots_for_day,
     get_project_names_for_day,
@@ -18,6 +21,14 @@ from clockifycal.loader import (
 
 def _hhmm_to_iso(day: str, hhmm: str) -> str:
     return f"{day}T{hhmm}:00+00:00"
+
+
+def _write_local_employees_file(contents: str) -> Path:
+    root = Path(".pytest-local")
+    root.mkdir(exist_ok=True)
+    path = root / f"employees-{uuid4().hex}.json"
+    path.write_text(contents, encoding="utf-8")
+    return path
 
 
 def test_loader_fetches_user_then_time_entries_and_transforms(monkeypatch):
@@ -255,6 +266,52 @@ def test_cli_prints_project_names(monkeypatch, capsys):
     assert "Internal (p-1)" in captured.out
 
 
+def test_cli_prints_employee_tasks_from_file(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    employees_file = _write_local_employees_file('{"employees":["ali"]}')
+
+    def fake_employee_loader(**kwargs):
+        assert kwargs["employee_names"] == ["ali"]
+        return [
+            {
+                "uid": "te-1",
+                "summary": "Task",
+                "employee_name": "Alice Johnson",
+                "project_name": "Internal",
+                "start_iso": "2026-03-06T08:00:00+00:00",
+                "end_iso": "2026-03-06T09:00:00+00:00",
+                "is_current": False,
+                "is_next": False,
+                "is_next_overlapping": False,
+            }
+        ]
+
+    monkeypatch.setattr("clockifycal.cli.get_employee_events_for_day", fake_employee_loader)
+
+    try:
+        exit_code = main(
+            [
+                "--api-key",
+                "key-1",
+                "--tz",
+                "Europe/Kyiv",
+                "--date",
+                "2026-03-06",
+                "--employees-tasks",
+                "--employees-file",
+                str(employees_file),
+                "--list",
+            ]
+        )
+        captured = capsys.readouterr()
+
+        assert exit_code == 0
+        assert "Alice Johnson | Task | Internal" in captured.out
+    finally:
+        employees_file.unlink(missing_ok=True)
+
+
 def test_loader_raises_if_workspace_not_found():
     with pytest.raises(ValueError):
         get_events_for_day(
@@ -302,6 +359,51 @@ def test_project_names_for_day_resolves_project_names(monkeypatch):
         {"project_id": "p-1", "project_name": "Project p-1"},
         {"project_id": "p-2", "project_name": "Project p-2"},
     ]
+
+
+def test_employee_events_for_day_resolves_partial_names_and_adds_project_name():
+    workspace_users = [
+        {"id": "u-1", "name": "Alice Johnson", "email": "alice@example.com"},
+        {"id": "u-2", "name": "Bob Smith", "email": "bob@example.com"},
+    ]
+    entries_by_user = {
+        "u-1": [
+            {
+                "id": "te-1",
+                "description": "Alice task",
+                "projectId": "p-1",
+                "timeInterval": {"start": "2026-03-06T10:00:00Z", "end": "2026-03-06T11:00:00Z"},
+            }
+        ],
+        "u-2": [
+            {
+                "id": "te-2",
+                "description": "Bob task",
+                "projectId": "p-2",
+                "timeInterval": {"start": "2026-03-06T11:00:00Z", "end": "2026-03-06T12:00:00Z"},
+            }
+        ],
+    }
+    project_payloads = {
+        "p-1": {"id": "p-1", "name": "Project One"},
+        "p-2": {"id": "p-2", "name": "Project Two"},
+    }
+
+    events = get_employee_events_for_day(
+        api_key="token",
+        employee_names=["ali", "bo"],
+        user_timezone="UTC",
+        target_date=datetime(2026, 3, 6, 12, 0, tzinfo=timezone.utc),
+        now_override="2026-03-06T09:00:00Z",
+        workspace_id="w1",
+        user_payload={"id": "owner", "defaultWorkspace": "w1", "email": "owner@example.com"},
+        workspace_users_payload=workspace_users,
+        time_entries_payload_by_user=entries_by_user,
+        project_payloads=project_payloads,
+    )
+
+    assert [event["employee_name"] for event in events] == ["Alice Johnson", "Bob Smith"]
+    assert [event["project_name"] for event in events] == ["Project One", "Project Two"]
 
 
 def test_free_slots_split_by_max_one_hour():

@@ -12,10 +12,20 @@ if __package__ in (None, ""):
     # Allow direct execution: `python clockifycal/cli.py`
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from clockifycal.client import ClockifyAPIError
-    from clockifycal.loader import get_events_for_day, get_free_slots_for_day, get_project_names_for_day
+    from clockifycal.loader import (
+        get_employee_events_for_day,
+        get_events_for_day,
+        get_free_slots_for_day,
+        get_project_names_for_day,
+    )
 else:
     from .client import ClockifyAPIError
-    from .loader import get_events_for_day, get_free_slots_for_day, get_project_names_for_day
+    from .loader import (
+        get_employee_events_for_day,
+        get_events_for_day,
+        get_free_slots_for_day,
+        get_project_names_for_day,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -32,6 +42,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", dest="short_list", action="store_true", help="Print a short event list")
     parser.add_argument("--free-slots", action="store_true", help="Return free slots instead of events")
     parser.add_argument("--project-names", action="store_true", help="Return Clockify project names for the selected day")
+    parser.add_argument(
+        "--employees-tasks",
+        action="store_true",
+        help="Return day tasks for employees from JSON file (adds employee_name and project_name)",
+    )
+    parser.add_argument(
+        "--employees-file",
+        default=str(Path(__file__).with_name("employees.json")),
+        help="Path to JSON with employee names (array or {'employees': [...]})",
+    )
     return parser
 
 
@@ -68,9 +88,11 @@ def _print_short_list(
         start = _to_local_iso(event.get("start_iso"), out_tz)
         end = _to_local_iso(event.get("end_iso"), out_tz)
         summary = str(event.get("summary", "")).strip() or "Clockify Time Entry"
+        employee_name = str(event.get("employee_name", "")).strip()
         project_id = str(event.get("project_id", "")).strip()
-        project_name = ""
-        if project_id and project_name_by_id:
+        event_project_name = str(event.get("project_name", "")).strip()
+        project_name = event_project_name
+        if not project_name and project_id and project_name_by_id:
             project_name = project_name_by_id.get(project_id, "").strip()
 
         flags: list[str] = []
@@ -82,7 +104,11 @@ def _print_short_list(
             flags.append("next-overlap")
 
         suffix = f" [{' | '.join(flags)}]" if flags else ""
-        if project_name:
+        if employee_name and project_name:
+            print(f"- {start} -> {end} | {employee_name} | {summary} | {project_name}{suffix}")
+        elif employee_name:
+            print(f"- {start} -> {end} | {employee_name} | {summary}{suffix}")
+        elif project_name:
             print(f"- {start} -> {end} | {summary} | {project_name}{suffix}")
         else:
             print(f"- {start} -> {end} | {summary}{suffix}")
@@ -111,6 +137,28 @@ def _print_short_project_names(projects: list[dict[str, object]]) -> None:
         print(f"- {name} ({project_id})")
 
 
+def _load_employee_names(path_value: str) -> list[str]:
+    path = Path(path_value)
+    if not path.exists():
+        raise ValueError(f"Employees file not found: {path}")
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        names = [str(item).strip() for item in raw]
+    elif isinstance(raw, dict):
+        employees = raw.get("employees")
+        if not isinstance(employees, list):
+            raise ValueError("Employees file must have 'employees' array")
+        names = [str(item).strip() for item in employees]
+    else:
+        raise ValueError("Employees file must be JSON array or object with 'employees'")
+
+    cleaned = [name for name in names if name]
+    if not cleaned:
+        raise ValueError("Employees file does not contain non-empty names")
+    return cleaned
+
+
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     if not args.api_key:
@@ -129,6 +177,18 @@ def main(argv: list[str] | None = None) -> int:
                 base_url=args.base_url,
                 workspace_id=args.workspace_id,
                 user_id=args.user_id,
+                timeout=args.timeout,
+            )
+        elif args.employees_tasks:
+            employee_names = _load_employee_names(args.employees_file)
+            output_data = get_employee_events_for_day(
+                api_key=args.api_key,
+                employee_names=employee_names,
+                user_timezone=args.tz,
+                target_date=target,
+                now_override=args.now,
+                base_url=args.base_url,
+                workspace_id=args.workspace_id,
                 timeout=args.timeout,
             )
         elif args.free_slots:
@@ -164,12 +224,17 @@ def main(argv: list[str] | None = None) -> int:
             _print_short_free_slots(output_data, args.tz)
         else:
             project_name_by_id: dict[str, str] = {}
-            project_ids = sorted(
-                {
-                    str(event.get("project_id", "")).strip()
-                    for event in output_data
-                    if str(event.get("project_id", "")).strip()
-                }
+            include_project_lookup = not args.employees_tasks
+            project_ids = (
+                sorted(
+                    {
+                        str(event.get("project_id", "")).strip()
+                        for event in output_data
+                        if str(event.get("project_id", "")).strip()
+                    }
+                )
+                if include_project_lookup
+                else []
             )
             if project_ids:
                 projects = get_project_names_for_day(

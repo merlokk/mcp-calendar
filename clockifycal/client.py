@@ -97,3 +97,21 @@ def get_project(
     if not isinstance(payload, dict):
         raise ClockifyAPIError("Unexpected project response shape")
     return payload
+
+
+def get_workspace_users(
+    api_key: str,
+    workspace_id: str,
+    *,
+    base_url: str = DEFAULT_BASE_URL,
+    timeout: int = 15,
+) -> list[dict[str, Any]]:
+    if not workspace_id:
+        raise ValueError("workspace_id is required")
+
+    path = f"/v1/workspaces/{workspace_id}/users"
+    url = f"{base_url.rstrip('/')}{path}"
+    payload = _http_get_json(url, api_key=api_key, timeout=timeout)
+    if not isinstance(payload, list):
+        raise ClockifyAPIError("Unexpected workspace users response shape")
+    return [user for user in payload if isinstance(user, dict)]

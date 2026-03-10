@@ -20,6 +20,7 @@ Usage
 
   python run_mcp.py get_clockify_tasks --date 2026-02-13
   python run_mcp.py get_clockify_free_slots --date 2026-02-13
+  python run_mcp.py get_clockify_employee_tasks --date 2026-02-13 --employees-file clockifycal/employees.json
   python run_mcp.py get_server_overview
 
   # pipe into jq
@@ -42,6 +43,7 @@ from mcp_calendar import (
     get_free_slots,
     get_clockify_tasks,
     get_clockify_free_slots,
+    get_clockify_employee_tasks,
     get_server_overview,
 )  # noqa: E402
 
@@ -56,7 +58,7 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("tool", choices=["get_now", "get_day", "get_free_slots", "get_clockify_tasks", "get_clockify_free_slots", "get_server_overview"],
+    p.add_argument("tool", choices=["get_now", "get_day", "get_free_slots", "get_clockify_tasks", "get_clockify_free_slots", "get_clockify_employee_tasks", "get_server_overview"],
                    help="Tool to call")
 
     p.add_argument("--override-now", metavar="ISO",
@@ -73,6 +75,8 @@ def _parse_args() -> argparse.Namespace:
                    help="Working day start (default: 09:00)")
     p.add_argument("--day-end", metavar="HH:MM", default="18:00",
                    help="Working day end (default: 18:00)")
+    p.add_argument("--employees-file", metavar="PATH",
+                   help="Employees JSON file path (for get_clockify_employee_tasks)")
 
     return p.parse_args()
 
@@ -109,6 +113,13 @@ def main() -> None:
             result = get_clockify_free_slots(
                 date_str=args.date,
                 override_now=args.override_now,
+            )
+
+        elif args.tool == "get_clockify_employee_tasks":
+            result = get_clockify_employee_tasks(
+                date_str=args.date,
+                override_now=args.override_now,
+                employees_file=args.employees_file,
             )
 
         elif args.tool == "get_server_overview":

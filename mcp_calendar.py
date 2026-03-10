@@ -10,6 +10,7 @@ CLOCKIFY_API_KEY (optional) Clockify API key for get_clockify_tasks/get_clockify
 CLOCKIFY_BASE_URL (optional) Clockify API base URL, default https://api.clockify.me/api
 CLOCKIFY_WORKSPACE_ID (optional) override workspace id for Clockify
 CLOCKIFY_USER_ID (optional) override user id for Clockify
+CLOCKIFY_EMPLOYEES_FILE (optional) path to employees JSON file for employee tasks
 TZ              (optional) IANA timezone, default "Europe/Nicosia"
 CACHE_MS        (optional) in-memory cache TTL ms, default 60000
 OVERRIDE_NOW    (optional) ISO datetime to override "now" for testing
@@ -29,13 +30,17 @@ Tools
   get_free_slots   → free time slots for today or a given date
   get_clockify_tasks -> Clockify time entries for today or a given date
   get_clockify_free_slots -> free slots from Clockify time entries
+  get_clockify_employee_tasks -> Clockify employee tasks for today or a given date
+
 """
 
 from __future__ import annotations
 
 import os
+import json
 import time
 from datetime import datetime, date, timedelta, timezone
+from pathlib import Path
 from typing import Any, Optional
 
 import pytz
@@ -51,9 +56,11 @@ except ImportError:
 try:
     from clockifycal.loader import get_events_for_day as get_clockify_events_for_day
     from clockifycal.loader import get_free_slots_for_day as get_clockify_free_slots_for_day
+    from clockifycal.loader import get_employee_events_for_day as get_clockify_employee_events_for_day
 except ImportError:
     get_clockify_events_for_day = None  # type: ignore[assignment]
     get_clockify_free_slots_for_day = None  # type: ignore[assignment]
+    get_clockify_employee_events_for_day = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Module-level setup
@@ -145,6 +152,37 @@ def _clockify_config() -> dict[str, str]:
         "workspace_id": os.environ.get("CLOCKIFY_WORKSPACE_ID", "").strip(),
         "user_id": os.environ.get("CLOCKIFY_USER_ID", "").strip(),
     }
+
+
+def _clockify_employees_file(default_path: Optional[str] = None) -> str:
+    if default_path:
+        return default_path
+    env_path = os.environ.get("CLOCKIFY_EMPLOYEES_FILE", "").strip()
+    if env_path:
+        return env_path
+    return str(Path(__file__).resolve().with_name("clockifycal").joinpath("employees.json"))
+
+
+def _load_employee_names(path_value: str) -> list[str]:
+    path = Path(path_value)
+    if not path.exists():
+        raise ValueError(f"Employees file not found: {path}")
+
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    if isinstance(raw, list):
+        names = [str(item).strip() for item in raw]
+    elif isinstance(raw, dict):
+        employees = raw.get("employees")
+        if not isinstance(employees, list):
+            raise ValueError("Employees file must have 'employees' array")
+        names = [str(item).strip() for item in employees]
+    else:
+        raise ValueError("Employees file must be JSON array or object with 'employees'")
+
+    cleaned = [name for name in names if name]
+    if not cleaned:
+        raise ValueError("Employees file does not contain non-empty names")
+    return cleaned
 
 
 def _fetch_events(target: date, tz: pytz.BaseTzInfo,
@@ -250,6 +288,44 @@ def _fetch_clockify_free_slots(target: date, tz: pytz.BaseTzInfo,
     )
     _cache_set(key, slots)
     return slots
+
+
+def _fetch_clockify_employee_events(
+    target: date,
+    tz: pytz.BaseTzInfo,
+    now_utc: datetime,
+    employees_file: Optional[str] = None,
+) -> list[dict]:
+    cfg = _clockify_config()
+    if not cfg["api_key"]:
+        raise ValueError("CLOCKIFY_API_KEY environment variable is not set")
+    if get_clockify_employee_events_for_day is None:
+        raise RuntimeError("clockifycal is not available")
+
+    resolved_employees_file = _clockify_employees_file(employees_file)
+    employee_names = _load_employee_names(resolved_employees_file)
+
+    key = (
+        f"clockify-employees|{tz.zone}|{target.isoformat()}|{cfg['base_url']}|"
+        f"{cfg['workspace_id']}|{resolved_employees_file}|{','.join(sorted(employee_names))}"
+    )
+    ttl = _cache_ms()
+
+    cached = _cache_get(key, ttl)
+    if cached is not None:
+        return cached
+
+    events = get_clockify_employee_events_for_day(
+        api_key=cfg["api_key"],
+        employee_names=employee_names,
+        user_timezone=tz.zone,
+        target_date=target,
+        now_override=now_utc,
+        base_url=cfg["base_url"],
+        workspace_id=cfg["workspace_id"] or None,
+    )
+    _cache_set(key, events)
+    return events
 
 
 # ---------------------------------------------------------------------------
@@ -496,6 +572,48 @@ def get_clockify_free_slots(
 
 
 @mcp.tool()
+def get_clockify_employee_tasks(
+    date_str: Optional[str] = None,
+    override_now: Optional[str] = None,
+    employees_file: Optional[str] = None,
+) -> dict:
+    """
+    Return Clockify tasks for employees from JSON file for a given day.
+
+    Args:
+        date_str:       ISO date "YYYY-MM-DD". Defaults to today.
+        override_now:   Optional ISO datetime to use as "now".
+        employees_file: Optional path to employees JSON file.
+    """
+    tz = _resolve_tz()
+    now_utc = _resolve_now(override_now)
+    target = _resolve_date(date_str, tz, now_utc)
+    events = _fetch_clockify_employee_events(target, tz, now_utc, employees_file=employees_file)
+
+    window_start = tz.localize(datetime(target.year, target.month, target.day))
+    window_end = tz.normalize(window_start + timedelta(days=1))
+
+    tasks: list[dict[str, Any]] = []
+    for event in events:
+        task = _fmt(event, tz)
+        task["employeeName"] = event.get("employee_name")
+        task["projectName"] = event.get("project_name")
+        tasks.append(task)
+
+    return {
+        "source": "clockify",
+        "date": target.isoformat(),
+        "tz": tz.zone,
+        "window": {
+            "start": window_start.isoformat(),
+            "end": window_end.isoformat(),
+        },
+        "count": len(tasks),
+        "tasks": tasks,
+    }
+
+
+@mcp.tool()
 def get_server_overview() -> dict:
     """
     Return server purpose, day-based workflow, and tool/parameter reference.
@@ -558,6 +676,16 @@ def get_server_overview() -> dict:
                 "params": [
                     {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+                "envRequired": ["CLOCKIFY_API_KEY"],
+            },
+            {
+                "name": "get_clockify_employee_tasks",
+                "description": "Clockify employee tasks for a specific day from employees JSON file.",
+                "params": [
+                    {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                    {"name": "employees_file", "type": "string|null", "required": False},
                 ],
                 "envRequired": ["CLOCKIFY_API_KEY"],
             },

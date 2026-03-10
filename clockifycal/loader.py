@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .client import DEFAULT_BASE_URL, get_current_user, get_project, get_time_entries
+from .client import DEFAULT_BASE_URL, get_current_user, get_project, get_time_entries, get_workspace_users
 
 WORKDAY_START_HHMM = "10:00"
 WORKDAY_END_HHMM = "19:00"
@@ -444,3 +444,173 @@ def get_project_names_for_day(
         out.append({"project_id": project_id, "project_name": name})
 
     return out
+
+
+def _employee_display_name(user_payload: dict[str, Any]) -> str:
+    name = str(user_payload.get("name", "")).strip()
+    if name:
+        return name
+    email = str(user_payload.get("email", "")).strip()
+    if email:
+        return email
+    return str(user_payload.get("id", "")).strip()
+
+
+def _resolve_single_employee(
+    query_name: str,
+    users: list[dict[str, Any]],
+) -> dict[str, Any]:
+    query = query_name.strip().lower()
+    if not query:
+        raise ValueError("Employee name in employees list must be non-empty")
+
+    def user_tokens(user: dict[str, Any]) -> list[str]:
+        tokens: list[str] = []
+        name = str(user.get("name", "")).strip().lower()
+        email = str(user.get("email", "")).strip().lower()
+        if name:
+            tokens.append(name)
+        if email:
+            tokens.append(email)
+        if "@" in email:
+            tokens.append(email.split("@", 1)[0])
+        return tokens
+
+    exact = [u for u in users if query in user_tokens(u)]
+    if len(exact) == 1:
+        return exact[0]
+
+    startswith = [u for u in users if any(token.startswith(query) for token in user_tokens(u))]
+    if len(startswith) == 1:
+        return startswith[0]
+
+    contains = [u for u in users if any(query in token for token in user_tokens(u))]
+    if len(contains) == 1:
+        return contains[0]
+
+    if exact:
+        candidates = exact
+    elif startswith:
+        candidates = startswith
+    else:
+        candidates = contains
+
+    if not candidates:
+        raise ValueError(f"Employee '{query_name}' not found in workspace users")
+
+    names = ", ".join(sorted(_employee_display_name(u) for u in candidates)[:5])
+    raise ValueError(f"Employee '{query_name}' is ambiguous; matches: {names}")
+
+
+def get_employee_events_for_day(
+    *,
+    api_key: str,
+    employee_names: list[str],
+    user_timezone: str = "UTC",
+    target_date: Optional[date | datetime] = None,
+    now_override: Optional[datetime | str] = None,
+    base_url: str = DEFAULT_BASE_URL,
+    workspace_id: str | None = None,
+    timeout: int = 15,
+    user_payload: Optional[dict[str, Any]] = None,
+    workspace_users_payload: Optional[list[dict[str, Any]]] = None,
+    time_entries_payload_by_user: Optional[dict[str, list[dict[str, Any]]]] = None,
+    project_payloads: Optional[dict[str, dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    if not employee_names:
+        return []
+
+    owner = user_payload or get_current_user(api_key=api_key, base_url=base_url, timeout=timeout)
+    workspace = workspace_id or str(owner.get("defaultWorkspace", "")).strip()
+    if not workspace:
+        raise ValueError("Clockify user payload has no defaultWorkspace and workspace_id not provided")
+
+    workspace_users = workspace_users_payload
+    if workspace_users is None:
+        workspace_users = get_workspace_users(
+            api_key=api_key,
+            workspace_id=workspace,
+            base_url=base_url,
+            timeout=timeout,
+        )
+
+    selected_users: list[dict[str, Any]] = []
+    selected_ids: set[str] = set()
+    for raw_name in employee_names:
+        matched_user = _resolve_single_employee(raw_name, workspace_users)
+        matched_user_id = str(matched_user.get("id", "")).strip()
+        if not matched_user_id or matched_user_id in selected_ids:
+            continue
+        selected_ids.add(matched_user_id)
+        selected_users.append(matched_user)
+
+    all_events: list[dict[str, Any]] = []
+    project_ids: set[str] = set()
+
+    for employee in selected_users:
+        employee_id = str(employee.get("id", "")).strip()
+        if not employee_id:
+            continue
+        employee_name = _employee_display_name(employee)
+        employee_email = str(employee.get("email", "")).strip()
+
+        entries_payload = None
+        if time_entries_payload_by_user is not None:
+            entries_payload = time_entries_payload_by_user.get(employee_id)
+
+        employee_events = get_events_for_day(
+            api_key=api_key,
+            user_timezone=user_timezone,
+            target_date=target_date,
+            now_override=now_override,
+            base_url=base_url,
+            workspace_id=workspace,
+            user_id=employee_id,
+            timeout=timeout,
+            user_payload={
+                "id": employee_id,
+                "defaultWorkspace": workspace,
+                "email": employee_email,
+            },
+            time_entries_payload=entries_payload,
+        )
+
+        for event in employee_events:
+            project_id = str(event.get("project_id", "")).strip()
+            if project_id:
+                project_ids.add(project_id)
+            all_events.append(
+                {
+                    **event,
+                    "employee_id": employee_id,
+                    "employee_name": employee_name,
+                }
+            )
+
+    project_name_by_id: dict[str, str] = {}
+    project_cache = project_payloads or {}
+    for project_id in sorted(project_ids):
+        payload = project_cache.get(project_id)
+        if payload is None:
+            payload = get_project(
+                api_key=api_key,
+                workspace_id=workspace,
+                project_id=project_id,
+                base_url=base_url,
+                timeout=timeout,
+            )
+        project_name = str(payload.get("name", "")).strip() or project_id
+        project_name_by_id[project_id] = project_name
+
+    enriched: list[dict[str, Any]] = []
+    for event in all_events:
+        project_id = str(event.get("project_id", "")).strip()
+        enriched.append(
+            {
+                **event,
+                "project_name": project_name_by_id.get(project_id) if project_id else None,
+            }
+        )
+
+    enriched.sort(key=lambda ev: (int(ev.get("start_ms", 0)), str(ev.get("employee_name", "")), str(ev.get("uid", ""))))
+    return enriched
