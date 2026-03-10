@@ -35,6 +35,7 @@ python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --list
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-slots --pretty
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-slots --list
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --employees-tasks --employees-file clockifycal/employees.json --list
+python -m clockifycal.cli --api-key YOUR_KEY --workspace-users --list
 ```
 
 ### 3) MCP server (`mcp_calendar.py`)

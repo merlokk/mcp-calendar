@@ -7,6 +7,7 @@ It loads time entries and exposes:
 - free slot list for a day (`get_free_slots_for_day`)
 - project names for a day (`get_project_names_for_day`)
 - employee tasks for a day (`get_employee_events_for_day`)
+- workspace users (`get_workspace_users_for_workspace`)
 
 ## API calls used
 
@@ -26,6 +27,7 @@ Base URL default:
 - `get_project_names_for_day(...)`: returns unique project names used by day entries.
 - `get_employee_events_for_day(...)`: returns day entries for a list of workspace employees,
   with `employee_name` and `project_name`.
+- `get_workspace_users_for_workspace(...)`: returns all users from selected workspace.
 
 ## Free-slot rules
 
@@ -86,6 +88,12 @@ Project names:
 python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --project-names --list
 ```
 
+Workspace users:
+
+```bash
+python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --workspace-users --list
+```
+
 Employee tasks by names from JSON file:
 
 ```bash
@@ -116,5 +124,6 @@ Supported args:
 - `--list`
 - `--free-slots`
 - `--project-names`
+- `--workspace-users`
 - `--employees-tasks`
 - `--employees-file`

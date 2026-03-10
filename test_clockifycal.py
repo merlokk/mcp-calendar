@@ -16,6 +16,7 @@ from clockifycal.loader import (
     get_events_for_day,
     get_free_slots_for_day,
     get_project_names_for_day,
+    get_workspace_users_for_workspace,
 )
 
 
@@ -266,6 +267,30 @@ def test_cli_prints_project_names(monkeypatch, capsys):
     assert "Internal (p-1)" in captured.out
 
 
+def test_cli_prints_workspace_users(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    def fake_workspace_users_loader(**kwargs):
+        assert kwargs["api_key"] == "key-1"
+        return [
+            {
+                "user_id": "u-1",
+                "name": "Alice Johnson",
+                "email": "alice@example.com",
+                "active": True,
+                "workspace_id": "w1",
+            }
+        ]
+
+    monkeypatch.setattr("clockifycal.cli.get_workspace_users_for_workspace", fake_workspace_users_loader)
+
+    exit_code = main(["--api-key", "key-1", "--workspace-users", "--list"])
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert "Alice Johnson (alice@example.com) [active] (u-1)" in captured.out
+
+
 def test_cli_prints_employee_tasks_from_file(monkeypatch, capsys):
     from clockifycal.cli import main
 
@@ -404,6 +429,21 @@ def test_employee_events_for_day_resolves_partial_names_and_adds_project_name():
 
     assert [event["employee_name"] for event in events] == ["Alice Johnson", "Bob Smith"]
     assert [event["project_name"] for event in events] == ["Project One", "Project Two"]
+
+
+def test_workspace_users_for_workspace_resolves_owner_workspace():
+    users = get_workspace_users_for_workspace(
+        api_key="token",
+        user_payload={"id": "owner", "defaultWorkspace": "w1"},
+        workspace_users_payload=[
+            {"id": "u-2", "name": "Bob", "email": "bob@example.com", "active": False},
+            {"id": "u-1", "name": "Alice", "email": "alice@example.com", "active": True},
+        ],
+    )
+
+    assert [u["user_id"] for u in users] == ["u-1", "u-2"]
+    assert users[0]["workspace_id"] == "w1"
+    assert users[1]["active"] is False
 
 
 def test_free_slots_split_by_max_one_hour():

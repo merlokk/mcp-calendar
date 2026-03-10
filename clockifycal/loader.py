@@ -456,6 +456,47 @@ def _employee_display_name(user_payload: dict[str, Any]) -> str:
     return str(user_payload.get("id", "")).strip()
 
 
+def get_workspace_users_for_workspace(
+    *,
+    api_key: str,
+    base_url: str = DEFAULT_BASE_URL,
+    workspace_id: str | None = None,
+    timeout: int = 15,
+    user_payload: Optional[dict[str, Any]] = None,
+    workspace_users_payload: Optional[list[dict[str, Any]]] = None,
+) -> list[dict[str, Any]]:
+    owner = user_payload or get_current_user(api_key=api_key, base_url=base_url, timeout=timeout)
+    workspace = workspace_id or str(owner.get("defaultWorkspace", "")).strip()
+    if not workspace:
+        raise ValueError("Clockify user payload has no defaultWorkspace and workspace_id not provided")
+
+    users = workspace_users_payload
+    if users is None:
+        users = get_workspace_users(
+            api_key=api_key,
+            workspace_id=workspace,
+            base_url=base_url,
+            timeout=timeout,
+        )
+
+    out: list[dict[str, Any]] = []
+    for user in users:
+        user_id = str(user.get("id", "")).strip()
+        if not user_id:
+            continue
+        out.append(
+            {
+                "user_id": user_id,
+                "name": _employee_display_name(user),
+                "email": str(user.get("email", "")).strip() or None,
+                "active": bool(user.get("active", True)),
+                "workspace_id": workspace,
+            }
+        )
+    out.sort(key=lambda item: (str(item.get("name", "")).lower(), str(item.get("email", "")).lower(), str(item.get("user_id", ""))))
+    return out
+
+
 def _resolve_single_employee(
     query_name: str,
     users: list[dict[str, Any]],

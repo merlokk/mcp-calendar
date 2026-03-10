@@ -17,6 +17,7 @@ if __package__ in (None, ""):
         get_events_for_day,
         get_free_slots_for_day,
         get_project_names_for_day,
+        get_workspace_users_for_workspace,
     )
 else:
     from .client import ClockifyAPIError
@@ -25,6 +26,7 @@ else:
         get_events_for_day,
         get_free_slots_for_day,
         get_project_names_for_day,
+        get_workspace_users_for_workspace,
     )
 
 
@@ -42,6 +44,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--list", dest="short_list", action="store_true", help="Print a short event list")
     parser.add_argument("--free-slots", action="store_true", help="Return free slots instead of events")
     parser.add_argument("--project-names", action="store_true", help="Return Clockify project names for the selected day")
+    parser.add_argument("--workspace-users", action="store_true", help="Return all users in workspace")
     parser.add_argument(
         "--employees-tasks",
         action="store_true",
@@ -137,6 +140,22 @@ def _print_short_project_names(projects: list[dict[str, object]]) -> None:
         print(f"- {name} ({project_id})")
 
 
+def _print_short_workspace_users(users: list[dict[str, object]]) -> None:
+    if not users:
+        print("No users")
+        return
+    for user in users:
+        name = str(user.get("name", "")).strip() or str(user.get("user_id", "")).strip()
+        user_id = str(user.get("user_id", "")).strip()
+        email = str(user.get("email", "")).strip()
+        active = bool(user.get("active", False))
+        status = "active" if active else "inactive"
+        if email:
+            print(f"- {name} ({email}) [{status}] ({user_id})")
+        else:
+            print(f"- {name} [{status}] ({user_id})")
+
+
 def _load_employee_names(path_value: str) -> list[str]:
     path = Path(path_value)
     if not path.exists():
@@ -168,7 +187,14 @@ def main(argv: list[str] | None = None) -> int:
     target = date.fromisoformat(args.target_date) if args.target_date else None
 
     try:
-        if args.project_names:
+        if args.workspace_users:
+            output_data = get_workspace_users_for_workspace(
+                api_key=args.api_key,
+                base_url=args.base_url,
+                workspace_id=args.workspace_id,
+                timeout=args.timeout,
+            )
+        elif args.project_names:
             output_data = get_project_names_for_day(
                 api_key=args.api_key,
                 user_timezone=args.tz,
@@ -218,7 +244,9 @@ def main(argv: list[str] | None = None) -> int:
         return 1
 
     if args.short_list:
-        if args.project_names:
+        if args.workspace_users:
+            _print_short_workspace_users(output_data)
+        elif args.project_names:
             _print_short_project_names(output_data)
         elif args.free_slots:
             _print_short_free_slots(output_data, args.tz)
