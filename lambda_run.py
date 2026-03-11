@@ -1,5 +1,5 @@
 """
-Local runner for lambda_handler.py
+Local runner for lambda_function.py
 ====================================
 Simulates an AWS Lambda + API Gateway invocation from the command line.
 
@@ -123,7 +123,7 @@ def _print_full(body: dict, color: bool) -> None:
 # ---------------------------------------------------------------------------
 def _parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(
-        description="Run lambda_handler.py locally",
+        description="Run lambda_function.py locally",
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     p.add_argument("--ics-urls",     metavar="URLS",
@@ -161,9 +161,9 @@ def main() -> None:
     # Build a minimal API Gateway-style event dict
     lambda_event = {"queryStringParameters": {"mode": args.mode}}
 
-    # Load lambda_handler.py by absolute path — immune to sys.path issues
+    # Load lambda_function.py by absolute path — immune to sys.path issues
     script_dir   = os.path.dirname(os.path.abspath(__file__))
-    handler_path = os.path.join(script_dir, "lambda_handler.py")
+    handler_path = os.path.join(script_dir, "lambda_function.py")
 
     if not os.path.exists(handler_path):
         print(f"File not found: {handler_path}", file=sys.stderr)
@@ -175,10 +175,10 @@ def main() -> None:
         spec.loader.exec_module(lh)
         handler = lh.handler
     except AttributeError:
-        print("lambda_handler.py has no function named 'handler'", file=sys.stderr)
+        print("lambda_function.py has no function named 'handler'", file=sys.stderr)
         sys.exit(1)
     except Exception as e:
-        print(f"Failed to load lambda_handler.py: {e}", file=sys.stderr)
+        print(f"Failed to load lambda_function.py: {e}", file=sys.stderr)
         sys.exit(1)
 
     class _FakeContext:

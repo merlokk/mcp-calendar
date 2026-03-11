@@ -1,6 +1,6 @@
 """
 test-lambda.py
-Tests for lambda_handler.py
+Tests for lambda_function.py
 ============================
 Only tests lambda-level logic:
   - parameter parsing (env / querystring / body priority)
@@ -29,20 +29,20 @@ import pytest
 import pytz
 
 # ---------------------------------------------------------------------------
-# Make sure the parent directory is on sys.path so we can import lambda_handler
+# Make sure the parent directory is on sys.path so we can import lambda_function
 # ---------------------------------------------------------------------------
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 
 # ---------------------------------------------------------------------------
-# Helpers to load / reload lambda_handler cleanly between tests
+# Helpers to load / reload lambda_function cleanly between tests
 # ---------------------------------------------------------------------------
 
 def _load_handler():
-    """Import (or re-import) lambda_handler and return the module."""
-    if "lambda_handler" in sys.modules:
-        del sys.modules["lambda_handler"]
-    import lambda_handler as lh
+    """Import (or re-import) lambda_function and return the module."""
+    if "lambda_function" in sys.modules:
+        del sys.modules["lambda_function"]
+    import lambda_function as lh
     return lh
 
 
