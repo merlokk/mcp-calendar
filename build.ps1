@@ -1,15 +1,14 @@
 Remove-Item build -Recurse -Force -ErrorAction Ignore
 mkdir build
 
-pip install `
-  --platform manylinux2014_x86_64 `
-  --implementation cp `
-  --python-version 3.13 `
-  --only-binary=:all: `
-  --target build `
-  -r requirements.txt
+docker run --rm `
+  -v "${PWD}:/var/task" `
+  --entrypoint /bin/sh `
+  public.ecr.aws/lambda/python:3.13 `
+  -c "python -m pip install --upgrade pip && pip install -r requirements-lambda.txt -t build"
 
-copy lambda_function.py build\
+Copy-Item lambda_function.py build\
+Copy-Item icscal build\icscal
 
 cd build
 Compress-Archive -Path * -DestinationPath ..\lambda.zip -Force
