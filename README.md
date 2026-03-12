@@ -12,6 +12,24 @@ Calendar and time-tracking toolkit with three layers:
 pip install -r requirements.txt
 ```
 
+For development and tests:
+
+```bash
+pip install -r requirements-dev.txt
+```
+
+Windows (recommended launcher):
+
+```powershell
+py -m pip install -r requirements-dev.txt
+```
+
+Verify test tooling:
+
+```bash
+python -m pytest --version
+```
+
 ## Components
 
 ### 1) ICS loader (`icscal`)
