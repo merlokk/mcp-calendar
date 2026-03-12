@@ -20,6 +20,8 @@ Response shapes
 ---------------
 mode=summary  →  { generatedAt, window, now, minutesUntilNext,
                    isOverlappingNow, current, next, nextOverlapping }
+                   where summary event blocks include:
+                   { uid, title, location, organizer, start, end, calendarId }
 mode=full     →  { generatedAt, window, now, events: [...] }
 """
 
@@ -100,6 +102,7 @@ def _event_to_summary(ev: dict, tz: pytz.BaseTzInfo) -> dict:
         "organizer": ev.get("organizer"),
         "start":     start_local.isoformat(),
         "end":       end_local.isoformat(),
+        "calendarId": ev.get("calendar_id"),
     }
 
 
@@ -252,3 +255,8 @@ def handler(event: dict, context: Any) -> dict:
         "nextOverlapping":  _event_to_summary(next_ov_ev, tz) if next_ov_ev else None,
     }
     return _build_response(200, body)
+
+
+# AWS Lambda default handler alias for configurations using
+# "lambda_function.lambda_handler".
+lambda_handler = handler

@@ -311,12 +311,12 @@ class TestSummaryShape:
         assert b["current"]["title"] == "Stand-up"
 
     def test_current_event_shape(self):
-        """current block must have uid, title, location, organizer, start, end."""
+        """current block must have uid, title, location, organizer, start, end, calendarId."""
         lh = _load_handler()
         ev = _fake_event(is_current=True, location="Room 1", organizer="boss@x.com")
         b = self._call_summary(lh, [ev])
         cur = b["current"]
-        for key in ("uid", "title", "location", "organizer", "start", "end"):
+        for key in ("uid", "title", "location", "organizer", "start", "end", "calendarId"):
             assert key in cur, f"missing key in current: {key}"
 
     def test_next_event_populated(self):
@@ -567,7 +567,7 @@ class TestEventToSummary:
     def test_fields_present(self):
         ev = _fake_event(location="Room A", organizer="x@corp.com")
         s = self.lh._event_to_summary(ev, self.tz)
-        for key in ("uid", "title", "location", "organizer", "start", "end"):
+        for key in ("uid", "title", "location", "organizer", "start", "end", "calendarId"):
             assert key in s
 
     def test_summary_becomes_title(self):
@@ -582,6 +582,11 @@ class TestEventToSummary:
         s = self.lh._event_to_summary(ev, self.tz)
         assert "+02:00" in s["start"]
         assert "+02:00" in s["end"]
+
+    def test_calendar_id_passthrough(self):
+        ev = _fake_event()
+        s = self.lh._event_to_summary(ev, self.tz)
+        assert s["calendarId"] == ev["calendar_id"]
 
     def test_location_none_passthrough(self):
         ev = _fake_event(location=None)
