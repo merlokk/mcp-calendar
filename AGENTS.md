@@ -12,9 +12,10 @@ Agent entrypoint for this repository.
 - MCP overview: `python run-mcp.py get_server_overview`
 - MCP clockify tasks: `python run-mcp.py get_clockify_tasks --date 2026-03-06`
 - MCP clockify free slots: `python run-mcp.py get_clockify_free_slots --date 2026-03-06`
-- Run Clockify tests: `pytest -q test_clockifycal.py`
-- Run MCP tests: `pytest -q test_mcp_calendar.py`
-- Run lambda tests: `pytest -q test-lambda.py`
+- In this Windows environment, prefer `py`; `python` and `pytest` may be unavailable in `PATH`.
+- Run Clockify tests: `py -m pytest -q test_clockifycal.py`
+- Run MCP tests: `py -m pytest -q test_mcp_calendar.py`
+- Run lambda tests: `py -m pytest -q test-lambda.py`
 
 ## Scope
 - Keep changes minimal and targeted.
