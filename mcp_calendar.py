@@ -14,6 +14,7 @@ CLOCKIFY_EMPLOYEES_FILE (optional) path to employees JSON file for employee task
 TZ              (optional) IANA timezone, default "Europe/Nicosia"
 CACHE_MS        (optional) in-memory cache TTL ms, default 60000
 OVERRIDE_NOW    (optional) ISO datetime to override "now" for testing
+MCP_LOG_FILE_ENABLED (optional) enable JSONL file logging next to mcp_calendar.py
 
 Run
 ---
@@ -39,9 +40,12 @@ from __future__ import annotations
 import os
 import json
 import time
+import inspect
 from datetime import datetime, date, timedelta, timezone
+from functools import wraps
 from pathlib import Path
 from typing import Any, Optional
+from uuid import uuid4
 
 import pytz
 from fastmcp import FastMCP
@@ -81,6 +85,21 @@ mcp = FastMCP(
 # ---------------------------------------------------------------------------
 _cache: dict[str, Any] = {}
 _CACHE_TTL_MS_DEFAULT = 60_000
+_LOG_FILE_ENABLED_ENV = "MCP_LOG_FILE_ENABLED"
+_LOG_FILE_NAME = "mcp_calendar.log"
+_LOG_ENV_KEYS = (
+    "ICS_URLS",
+    "CLOCKIFY_API_KEY",
+    "CLOCKIFY_BASE_URL",
+    "CLOCKIFY_WORKSPACE_ID",
+    "CLOCKIFY_USER_ID",
+    "CLOCKIFY_EMPLOYEES_FILE",
+    "TZ",
+    "CACHE_MS",
+    "OVERRIDE_NOW",
+    _LOG_FILE_ENABLED_ENV,
+)
+_LOG_REDACTED_ENV_KEYS = {"CLOCKIFY_API_KEY"}
 
 
 def _cache_get(key: str, ttl_ms: int) -> Optional[list]:
@@ -143,6 +162,99 @@ def _cache_ms() -> int:
         return int(os.environ.get("CACHE_MS", str(_CACHE_TTL_MS_DEFAULT)))
     except (ValueError, TypeError):
         return _CACHE_TTL_MS_DEFAULT
+
+
+def _env_flag(name: str, default: bool = False) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    return raw.strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _log_file_enabled() -> bool:
+    return _env_flag(_LOG_FILE_ENABLED_ENV, default=False)
+
+
+def _log_file_path() -> Path:
+    return Path(__file__).resolve().with_name(_LOG_FILE_NAME)
+
+
+def _logged_env_snapshot() -> dict[str, str]:
+    snapshot: dict[str, str] = {}
+    for key in _LOG_ENV_KEYS:
+        value = os.environ.get(key)
+        if value is None:
+            continue
+        if key in _LOG_REDACTED_ENV_KEYS and value:
+            snapshot[key] = "***REDACTED***"
+        else:
+            snapshot[key] = value
+    return snapshot
+
+
+def _append_log_record(record: dict[str, Any]) -> None:
+    if not _log_file_enabled():
+        return
+    try:
+        path = _log_file_path()
+        line = json.dumps(record, ensure_ascii=True, default=str)
+        with path.open("a", encoding="utf-8") as fh:
+            fh.write(line)
+            fh.write("\n")
+    except OSError:
+        # Logging must not change tool behavior.
+        pass
+
+
+def _tool_call_args(func: Any, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    bound = inspect.signature(func).bind_partial(*args, **kwargs)
+    bound.apply_defaults()
+    return dict(bound.arguments)
+
+
+def _logged_tool(func: Any) -> Any:
+    @wraps(func)
+    def wrapper(*args: Any, **kwargs: Any) -> Any:
+        invocation_id = uuid4().hex
+        tool_args = _tool_call_args(func, args, kwargs)
+        _append_log_record(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "request",
+                "invocationId": invocation_id,
+                "tool": func.__name__,
+                "args": tool_args,
+                "env": _logged_env_snapshot(),
+            }
+        )
+        try:
+            result = func(*args, **kwargs)
+        except Exception as exc:
+            _append_log_record(
+                {
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "event": "error",
+                    "invocationId": invocation_id,
+                    "tool": func.__name__,
+                    "error": {
+                        "type": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                }
+            )
+            raise
+        _append_log_record(
+            {
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "event": "response",
+                "invocationId": invocation_id,
+                "tool": func.__name__,
+                "response": result,
+            }
+        )
+        return result
+
+    return wrapper
 
 
 def _clockify_config() -> dict[str, str]:
@@ -333,6 +445,7 @@ def _fetch_clockify_employee_events(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_logged_tool
 def get_now(
     override_now: Optional[str] = None,
 ) -> dict:
@@ -370,6 +483,7 @@ def get_now(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_logged_tool
 def get_day(
     date_str: Optional[str] = None,
     override_now: Optional[str] = None,
@@ -407,6 +521,7 @@ def get_day(
 # ---------------------------------------------------------------------------
 
 @mcp.tool()
+@_logged_tool
 def get_free_slots(
     date_str:       Optional[str] = None,
     min_duration:   int = 30,
@@ -500,6 +615,7 @@ def get_free_slots(
 
 
 @mcp.tool()
+@_logged_tool
 def get_clockify_tasks(
     date_str: Optional[str] = None,
     override_now: Optional[str] = None,
@@ -533,6 +649,7 @@ def get_clockify_tasks(
 
 
 @mcp.tool()
+@_logged_tool
 def get_clockify_free_slots(
     date_str: Optional[str] = None,
     override_now: Optional[str] = None,
@@ -572,6 +689,7 @@ def get_clockify_free_slots(
 
 
 @mcp.tool()
+@_logged_tool
 def get_clockify_employee_tasks(
     date_str: Optional[str] = None,
     override_now: Optional[str] = None,
@@ -614,6 +732,7 @@ def get_clockify_employee_tasks(
 
 
 @mcp.tool()
+@_logged_tool
 def get_server_overview() -> dict:
     """
     Return server purpose, day-based workflow, and tool/parameter reference.

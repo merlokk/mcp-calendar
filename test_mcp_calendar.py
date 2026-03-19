@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -14,6 +15,14 @@ def _write_local_employees_file(contents: str) -> Path:
     root.mkdir(exist_ok=True)
     path = root / f"employees-{uuid4().hex}.json"
     path.write_text(contents, encoding="utf-8")
+    return path
+
+
+def _make_local_test_dir(prefix: str) -> Path:
+    root = Path(".pytest-local")
+    root.mkdir(exist_ok=True)
+    path = root / f"{prefix}-{uuid4().hex}"
+    path.mkdir()
     return path
 
 
@@ -295,6 +304,68 @@ def test_get_server_overview_contains_purpose_and_tool_params():
 
     day_tool = next(tool for tool in data["tools"] if tool["name"] == "get_day")
     assert any(param["name"] == "date_str" for param in day_tool["params"])
+
+
+def test_tool_logging_writes_jsonl_when_enabled(monkeypatch):
+    local_dir = _make_local_test_dir("logging-enabled")
+    monkeypatch.setattr(srv, "__file__", str(local_dir / "mcp_calendar.py"))
+
+    try:
+        with patch.dict(
+            "os.environ",
+            {
+                "MCP_LOG_FILE_ENABLED": "1",
+                "TZ": "UTC",
+            },
+            clear=False,
+        ):
+            data = srv.get_server_overview()
+
+        assert data["name"] == "calendar"
+
+        log_path = local_dir / "mcp_calendar.log"
+        assert log_path.exists()
+
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+        request_record = json.loads(lines[0])
+        response_record = json.loads(lines[1])
+
+        assert request_record["event"] == "request"
+        assert request_record["tool"] == "get_server_overview"
+        assert request_record["args"] == {}
+        assert request_record["env"]["MCP_LOG_FILE_ENABLED"] == "1"
+
+        assert response_record["event"] == "response"
+        assert response_record["tool"] == "get_server_overview"
+        assert response_record["response"]["name"] == "calendar"
+        assert response_record["invocationId"] == request_record["invocationId"]
+    finally:
+        for child in local_dir.iterdir():
+            child.unlink(missing_ok=True)
+        local_dir.rmdir()
+
+
+def test_tool_logging_does_not_write_file_when_disabled(monkeypatch):
+    local_dir = _make_local_test_dir("logging-disabled")
+    monkeypatch.setattr(srv, "__file__", str(local_dir / "mcp_calendar.py"))
+
+    try:
+        with patch.dict(
+            "os.environ",
+            {
+                "MCP_LOG_FILE_ENABLED": "0",
+                "TZ": "UTC",
+            },
+            clear=False,
+        ):
+            data = srv.get_server_overview()
+
+        assert data["name"] == "calendar"
+        assert (local_dir / "mcp_calendar.log").exists() is False
+    finally:
+        local_dir.rmdir()
 
 
 def test_mcp_stdio_transport_lists_tools_and_calls_tool():

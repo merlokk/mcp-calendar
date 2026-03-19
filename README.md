@@ -115,9 +115,15 @@ Clockify source:
 - `CLOCKIFY_WORKSPACE_ID` (optional override)
 - `CLOCKIFY_USER_ID` (optional override)
 
+MCP logging:
+
+- `MCP_LOG_FILE_ENABLED` (optional, set `1`/`true`/`yes`/`on` to append JSONL logs to `mcp_calendar.log` next to `mcp_calendar.py`)
+- When enabled, each MCP tool call logs request args, relevant env values, response payload, and errors
+
 ## Tests
 
 ```bash
+py -m pytest -q test_clockifycal.py test_mcp_calendar.py test-lambda.py icscal/tests.py
 pytest -q test_clockifycal.py
 pytest -q test_mcp_calendar.py
 pytest -q test-lambda.py
