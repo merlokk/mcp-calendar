@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import importlib.util
 import json
 from pathlib import Path
 from unittest.mock import patch
@@ -285,6 +286,109 @@ def test_get_clockify_employee_tasks_requires_api_key(monkeypatch):
         employees_file.unlink(missing_ok=True)
 
 
+def test_create_clockify_task_returns_created_task(monkeypatch):
+    srv._cache.clear()
+
+    def fake_create_task(**kwargs):
+        assert kwargs["api_key"] == "key-1"
+        assert kwargs["description"] == "Deep work"
+        assert kwargs["start_hhmm"] == "15:00"
+        assert kwargs["duration_min"] == 60
+        assert kwargs["project_name"] == "T-Platform"
+        return {
+            "id": "te-1",
+            "description": "Deep work",
+            "date": "2026-03-06",
+            "start": "2026-03-06T15:00:00+00:00",
+            "end": "2026-03-06T16:00:00+00:00",
+            "duration_min": 60,
+            "workspace_id": "w1",
+            "user_id": "u1",
+            "project_id": "p-1",
+            "project_name": "T-Platform",
+        }
+
+    monkeypatch.setattr(srv, "create_clockify_task_for_day", fake_create_task)
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CLOCKIFY_API_KEY": "key-1",
+            "TZ": "UTC",
+        },
+        clear=False,
+    ):
+        data = srv.create_clockify_task(
+            date_str="2026-03-06",
+            start_time="15:00",
+            duration_min=60,
+            description="Deep work",
+            project_name="T-Platform",
+            confirm=True,
+            override_now="2026-03-06T08:00:00Z",
+        )
+
+    assert data["source"] == "clockify"
+    assert data["action"] == "create_task"
+    assert data["confirmationRequired"] is True
+    assert data["confirmationVerifiedOnlyByFlag"] is True
+    assert data["task"]["project_name"] == "T-Platform"
+
+
+def test_create_clockify_task_requires_confirmation(monkeypatch):
+    srv._cache.clear()
+    monkeypatch.setattr(srv, "create_clockify_task_for_day", lambda **kwargs: {})
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CLOCKIFY_API_KEY": "key-1",
+            "TZ": "UTC",
+        },
+        clear=False,
+    ):
+        try:
+            srv.create_clockify_task(
+                date_str="2026-03-06",
+                start_time="15:00",
+                duration_min=60,
+                description="Deep work",
+                project_name="T-Platform",
+                confirm=False,
+                override_now="2026-03-06T08:00:00Z",
+            )
+            assert False, "Expected ValueError"
+        except ValueError as exc:
+            assert "requires explicit user confirmation" in str(exc)
+
+
+def test_create_clockify_task_requires_api_key(monkeypatch):
+    srv._cache.clear()
+    monkeypatch.setattr(srv, "create_clockify_task_for_day", lambda **kwargs: {})
+
+    with patch.dict(
+        "os.environ",
+        {
+            "CLOCKIFY_API_KEY": "",
+            "TZ": "UTC",
+        },
+        clear=False,
+    ):
+        try:
+            srv.create_clockify_task(
+                date_str="2026-03-06",
+                start_time="15:00",
+                duration_min=60,
+                description="Deep work",
+                project_name="T-Platform",
+                confirm=True,
+                override_now="2026-03-06T08:00:00Z",
+            )
+            assert False, "Expected ValueError"
+        except ValueError as exc:
+            assert "CLOCKIFY_API_KEY" in str(exc)
+
+
 def test_get_server_overview_contains_purpose_and_tool_params():
     data = srv.get_server_overview()
 
@@ -293,7 +397,7 @@ def test_get_server_overview_contains_purpose_and_tool_params():
     assert "ICS" in data["purpose"]
     assert "Clockify" in data["purpose"]
     assert "target day" in data["primaryWorkflow"]
-    assert isinstance(data["tools"], list) and len(data["tools"]) >= 7
+    assert isinstance(data["tools"], list) and len(data["tools"]) >= 8
 
     names = [tool["name"] for tool in data["tools"]]
     assert "get_server_overview" in names
@@ -301,9 +405,13 @@ def test_get_server_overview_contains_purpose_and_tool_params():
     assert "get_clockify_tasks" in names
     assert "get_clockify_free_slots" in names
     assert "get_clockify_employee_tasks" in names
+    assert "create_clockify_task" in names
 
     day_tool = next(tool for tool in data["tools"] if tool["name"] == "get_day")
     assert any(param["name"] == "date_str" for param in day_tool["params"])
+    create_tool = next(tool for tool in data["tools"] if tool["name"] == "create_clockify_task")
+    assert any(param["name"] == "confirm" for param in create_tool["params"])
+    assert "confirmation" in create_tool["description"]
 
 
 def test_tool_logging_writes_jsonl_when_enabled(monkeypatch):
@@ -368,6 +476,141 @@ def test_tool_logging_does_not_write_file_when_disabled(monkeypatch):
         local_dir.rmdir()
 
 
+def test_create_clockify_task_logging_writes_request_and_response(monkeypatch):
+    local_dir = _make_local_test_dir("logging-create-task")
+    monkeypatch.setattr(srv, "__file__", str(local_dir / "mcp_calendar.py"))
+
+    def fake_create_task(**kwargs):
+        return {
+            "id": "te-1",
+            "description": kwargs["description"],
+            "date": "2026-03-06",
+            "start": "2026-03-06T15:00:00+00:00",
+            "end": "2026-03-06T16:00:00+00:00",
+            "duration_min": kwargs["duration_min"],
+            "workspace_id": "w1",
+            "user_id": "u1",
+            "project_id": "p-1",
+            "project_name": kwargs["project_name"],
+        }
+
+    monkeypatch.setattr(srv, "create_clockify_task_for_day", fake_create_task)
+
+    try:
+        with patch.dict(
+            "os.environ",
+            {
+                "MCP_LOG_FILE_ENABLED": "1",
+                "CLOCKIFY_API_KEY": "key-1",
+                "TZ": "UTC",
+            },
+            clear=False,
+        ):
+            data = srv.create_clockify_task(
+                date_str="2026-03-06",
+                start_time="15:00",
+                duration_min=60,
+                description="Deep work",
+                project_name="T-Platform",
+                confirm=True,
+                override_now="2026-03-06T08:00:00Z",
+            )
+
+        assert data["task"]["project_name"] == "T-Platform"
+
+        log_path = local_dir / "mcp_calendar.log"
+        lines = log_path.read_text(encoding="utf-8").splitlines()
+        assert len(lines) == 2
+
+        request_record = json.loads(lines[0])
+        response_record = json.loads(lines[1])
+
+        assert request_record["tool"] == "create_clockify_task"
+        assert request_record["args"]["confirm"] is True
+        assert request_record["args"]["project_name"] == "T-Platform"
+        assert response_record["response"]["task"]["project_name"] == "T-Platform"
+    finally:
+        for child in local_dir.iterdir():
+            child.unlink(missing_ok=True)
+        local_dir.rmdir()
+
+
+def test_run_mcp_create_clockify_task_smoke(monkeypatch):
+    def fake_create_tool(
+        *,
+        date_str,
+        start_time,
+        duration_min,
+        description,
+        project_name,
+        project_id,
+        confirm,
+        override_now,
+    ):
+        assert date_str == "2026-03-06"
+        assert start_time == "15:00"
+        assert duration_min == 60
+        assert description == "Deep work"
+        assert project_name == "T-Platform"
+        assert project_id is None
+        assert confirm is True
+        assert override_now is None
+        return {
+            "source": "clockify",
+            "action": "create_task",
+            "confirmationRequired": True,
+            "confirmationVerifiedOnlyByFlag": True,
+            "task": {
+                "id": "te-1",
+                "description": "Deep work",
+                "date": "2026-03-06",
+                "start": "2026-03-06T15:00:00+00:00",
+                "end": "2026-03-06T16:00:00+00:00",
+                "duration_min": 60,
+                "workspace_id": "w1",
+                "user_id": "u1",
+                "project_id": "p-1",
+                "project_name": "T-Platform",
+            },
+        }
+
+    monkeypatch.setattr("mcp_calendar.create_clockify_task", fake_create_tool)
+
+    module_path = Path(__file__).with_name("run-mcp.py")
+    spec = importlib.util.spec_from_file_location("run_mcp_cli_test", module_path)
+    assert spec is not None and spec.loader is not None
+    run_mcp = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(run_mcp)
+
+    captured: list[str] = []
+    monkeypatch.setattr(run_mcp, "_print", lambda data: captured.append(json.dumps(data)))
+
+    with patch(
+        "sys.argv",
+        [
+            "run-mcp.py",
+            "create_clockify_task",
+            "--date",
+            "2026-03-06",
+            "--start-time",
+            "15:00",
+            "--duration-min",
+            "60",
+            "--description",
+            "Deep work",
+            "--project-name",
+            "T-Platform",
+            "--confirm",
+        ],
+    ):
+        run_mcp.main()
+
+    assert len(captured) == 1
+    payload = json.loads(captured[0])
+    assert payload["action"] == "create_task"
+    assert payload["task"]["project_name"] == "T-Platform"
+
+
 def test_mcp_stdio_transport_lists_tools_and_calls_tool():
     async def _run() -> None:
         server_path = Path(__file__).with_name("mcp_calendar.py")
@@ -381,6 +624,7 @@ def test_mcp_stdio_transport_lists_tools_and_calls_tool():
                 "get_clockify_tasks",
                 "get_clockify_free_slots",
                 "get_clockify_employee_tasks",
+                "create_clockify_task",
                 "get_server_overview",
             }.issubset(names)
 

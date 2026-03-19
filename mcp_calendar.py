@@ -32,6 +32,7 @@ Tools
   get_clockify_tasks -> Clockify time entries for today or a given date
   get_clockify_free_slots -> free slots from Clockify time entries
   get_clockify_employee_tasks -> Clockify employee tasks for today or a given date
+  create_clockify_task -> Create one Clockify task for the current user after explicit confirmation
 
 """
 
@@ -49,6 +50,7 @@ from uuid import uuid4
 
 import pytz
 from fastmcp import FastMCP
+from mcp.types import ToolAnnotations
 
 try:
     from icscal.calendar_loader import get_events_for_day
@@ -61,10 +63,12 @@ try:
     from clockifycal.loader import get_events_for_day as get_clockify_events_for_day
     from clockifycal.loader import get_free_slots_for_day as get_clockify_free_slots_for_day
     from clockifycal.loader import get_employee_events_for_day as get_clockify_employee_events_for_day
+    from clockifycal.loader import create_task_for_day as create_clockify_task_for_day
 except ImportError:
     get_clockify_events_for_day = None  # type: ignore[assignment]
     get_clockify_free_slots_for_day = None  # type: ignore[assignment]
     get_clockify_employee_events_for_day = None  # type: ignore[assignment]
+    create_clockify_task_for_day = None  # type: ignore[assignment]
 
 # ---------------------------------------------------------------------------
 # Module-level setup
@@ -76,7 +80,10 @@ mcp = FastMCP(
     instructions=(
         "Server purpose: read calendar events from ICS sources and read occupied time from Clockify. "
         "Primary workflow is day-based: pick one target date and call tools for that date. "
-        "Use get_server_overview to get full tool descriptions and required parameters."
+        "Use get_server_overview to get full tool descriptions and required parameters. "
+        "Any write operation in Clockify is destructive and must be executed only after a fresh, explicit user confirmation for that exact action. "
+        "For create_clockify_task, never call the tool unless the user's latest relevant message explicitly approves creating that specific task. "
+        "Treat prior confirmations as expired after any task details change."
     ),
 )
 
@@ -440,6 +447,15 @@ def _fetch_clockify_employee_events(
     return events
 
 
+def _require_clockify_write_confirmation(confirm: bool) -> None:
+    if confirm:
+        return
+    raise ValueError(
+        "Clockify write operation requires explicit user confirmation; "
+        "call this tool only after the user approves this exact task creation and set confirm=true"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Tool 1 — get_now
 # ---------------------------------------------------------------------------
@@ -731,6 +747,75 @@ def get_clockify_employee_tasks(
     }
 
 
+@mcp.tool(
+    annotations=ToolAnnotations(
+        readOnlyHint=False,
+        destructiveHint=True,
+        idempotentHint=False,
+        openWorldHint=True,
+        title="Create Clockify Task",
+    )
+)
+@_logged_tool
+def create_clockify_task(
+    date_str: str,
+    start_time: str,
+    duration_min: int,
+    description: str,
+    project_name: Optional[str] = None,
+    project_id: Optional[str] = None,
+    confirm: bool = False,
+    override_now: Optional[str] = None,
+) -> dict:
+    """
+    Create one Clockify task for the current user on a specific day.
+
+    Restrictions:
+    - Only creates entries for current Clockify user.
+    - Project is required.
+    - Duration must be <= 240 minutes.
+    - New task must not overlap existing entries.
+    - Caller must obtain explicit user confirmation for each invocation and pass confirm=True.
+
+    Note:
+    - The server can enforce confirm=True, but cannot independently verify that a human actually confirmed it.
+    """
+    _require_clockify_write_confirmation(confirm)
+
+    cfg = _clockify_config()
+    if not cfg["api_key"]:
+        raise ValueError("CLOCKIFY_API_KEY environment variable is not set")
+    if create_clockify_task_for_day is None:
+        raise RuntimeError("clockifycal is not available")
+
+    tz = _resolve_tz()
+    now_utc = _resolve_now(override_now)
+    target = _resolve_date(date_str, tz, now_utc)
+
+    created = create_clockify_task_for_day(
+        api_key=cfg["api_key"],
+        description=description,
+        start_hhmm=start_time,
+        duration_min=duration_min,
+        user_timezone=tz.zone,
+        target_date=target,
+        now_override=now_utc,
+        base_url=cfg["base_url"],
+        workspace_id=cfg["workspace_id"] or None,
+        user_id=cfg["user_id"] or None,
+        project_id=project_id,
+        project_name=project_name,
+    )
+
+    return {
+        "source": "clockify",
+        "action": "create_task",
+        "confirmationRequired": True,
+        "confirmationVerifiedOnlyByFlag": True,
+        "task": created,
+    }
+
+
 @mcp.tool()
 @_logged_tool
 def get_server_overview() -> dict:
@@ -807,6 +892,34 @@ def get_server_overview() -> dict:
                     {"name": "employees_file", "type": "string|null", "required": False},
                 ],
                 "envRequired": ["CLOCKIFY_API_KEY"],
+            },
+            {
+                "name": "create_clockify_task",
+                "description": (
+                    "Create one Clockify task for current user only. "
+                    "Restrictions: project is required, duration must be <= 240 minutes, "
+                    "task must not overlap existing entries, and every invocation requires fresh explicit user confirmation. "
+                    "Server enforces confirm=true but cannot independently verify human approval."
+                ),
+                "params": [
+                    {"name": "date_str", "type": "string", "required": True, "format": "YYYY-MM-DD"},
+                    {"name": "start_time", "type": "string", "required": True, "format": "HH:MM"},
+                    {"name": "duration_min", "type": "int", "required": True, "maximum": 240},
+                    {"name": "description", "type": "string", "required": True},
+                    {"name": "project_name", "type": "string|null", "required": False},
+                    {"name": "project_id", "type": "string|null", "required": False},
+                    {"name": "confirm", "type": "bool", "required": True, "mustBe": True},
+                    {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
+                ],
+                "envRequired": ["CLOCKIFY_API_KEY"],
+                "notes": [
+                    "Only current user can be used for creation.",
+                    "Either project_name or project_id is required.",
+                    "Ask for user confirmation every time before calling this tool.",
+                    "Never rely on an older confirmation if date, time, duration, description, or project changed.",
+                    "Best practice for the caller: quote or restate the latest user approval before sending confirm=true.",
+                    "MCP/FastMCP does not provide a guaranteed server-side human-confirmation primitive here; confirm=true is an enforced caller acknowledgment, not proof.",
+                ],
             },
         ],
     }

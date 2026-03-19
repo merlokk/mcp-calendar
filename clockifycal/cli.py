@@ -13,6 +13,7 @@ if __package__ in (None, ""):
     sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
     from clockifycal.client import ClockifyAPIError
     from clockifycal.loader import (
+        create_task_for_day,
         get_employee_events_for_day,
         get_events_for_day,
         get_free_slots_for_day,
@@ -22,6 +23,7 @@ if __package__ in (None, ""):
 else:
     from .client import ClockifyAPIError
     from .loader import (
+        create_task_for_day,
         get_employee_events_for_day,
         get_events_for_day,
         get_free_slots_for_day,
@@ -45,6 +47,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--free-slots", action="store_true", help="Return free slots instead of events")
     parser.add_argument("--project-names", action="store_true", help="Return Clockify project names for the selected day")
     parser.add_argument("--workspace-users", action="store_true", help="Return all users in workspace")
+    parser.add_argument("--add-task", action="store_true", help="Create a new time entry for the current user on selected day")
+    parser.add_argument("--start", dest="task_start", default=None, help="New task start time in HH:MM")
+    parser.add_argument("--duration-min", type=int, default=None, help="New task duration in minutes, max 240")
+    parser.add_argument("--description", default=None, help="New task description")
+    parser.add_argument("--project-id", default=None, help="Project id for new task")
+    parser.add_argument("--project-name", default=None, help="Project name for new task")
     parser.add_argument(
         "--employees-tasks",
         action="store_true",
@@ -192,6 +200,32 @@ def main(argv: list[str] | None = None) -> int:
                 api_key=args.api_key,
                 base_url=args.base_url,
                 workspace_id=args.workspace_id,
+                timeout=args.timeout,
+            )
+        elif args.add_task:
+            if not args.target_date:
+                raise ValueError("--date is required with --add-task")
+            if not args.task_start:
+                raise ValueError("--start is required with --add-task")
+            if args.duration_min is None:
+                raise ValueError("--duration-min is required with --add-task")
+            if args.description is None:
+                raise ValueError("--description is required with --add-task")
+            if not ((args.project_id or "").strip() or (args.project_name or "").strip()):
+                raise ValueError("--project-id or --project-name is required with --add-task")
+            output_data = create_task_for_day(
+                api_key=args.api_key,
+                description=args.description,
+                start_hhmm=args.task_start,
+                duration_min=args.duration_min,
+                user_timezone=args.tz,
+                target_date=target,
+                now_override=args.now,
+                base_url=args.base_url,
+                workspace_id=args.workspace_id,
+                user_id=args.user_id,
+                project_id=args.project_id,
+                project_name=args.project_name,
                 timeout=args.timeout,
             )
         elif args.project_names:

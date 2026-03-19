@@ -6,13 +6,15 @@ from uuid import uuid4
 
 import pytest
 
-from clockifycal.client import get_workspace_users
+from clockifycal.client import create_time_entry, get_workspace_projects, get_workspace_users
 from clockifycal.loader import (
     LUNCH_BREAK_MINUTES,
     LUNCH_WINDOW_START_HHMM,
     MAX_FREE_SLOT_MINUTES,
+    MAX_NEW_ENTRY_MINUTES,
     WORKDAY_END_HHMM,
     WORKDAY_START_HHMM,
+    create_task_for_day,
     get_employee_events_for_day,
     get_events_for_day,
     get_free_slots_for_day,
@@ -292,6 +294,99 @@ def test_cli_prints_workspace_users(monkeypatch, capsys):
     assert "Alice Johnson (alice@example.com) [active] (u-1)" in captured.out
 
 
+def test_cli_add_task_prints_created_entry(monkeypatch, capsys):
+    from clockifycal.cli import main
+
+    def fake_create_task(**kwargs):
+        assert kwargs["description"] == "Deep work"
+        assert kwargs["start_hhmm"] == "10:00"
+        assert kwargs["duration_min"] == 120
+        assert kwargs["project_name"] == "Internal"
+        return {
+            "id": "te-1",
+            "description": "Deep work",
+            "date": "2026-03-06",
+            "start": "2026-03-06T10:00:00+00:00",
+            "end": "2026-03-06T12:00:00+00:00",
+            "duration_min": 120,
+            "workspace_id": "w1",
+            "user_id": "u1",
+            "project_id": "p-1",
+            "project_name": "Internal",
+        }
+
+    monkeypatch.setattr("clockifycal.cli.create_task_for_day", fake_create_task)
+
+    exit_code = main(
+        [
+            "--api-key",
+            "key-1",
+            "--date",
+            "2026-03-06",
+            "--add-task",
+            "--start",
+            "10:00",
+            "--duration-min",
+            "120",
+            "--description",
+            "Deep work",
+            "--project-name",
+            "Internal",
+            "--pretty",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 0
+    assert '"id": "te-1"' in captured.out
+
+
+def test_cli_add_task_requires_date(capsys):
+    from clockifycal.cli import main
+
+    exit_code = main(
+        [
+            "--api-key",
+            "key-1",
+            "--add-task",
+            "--start",
+            "10:00",
+            "--duration-min",
+            "120",
+            "--description",
+            "Deep work",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "--date is required with --add-task" in captured.err
+
+
+def test_cli_add_task_requires_project(capsys):
+    from clockifycal.cli import main
+
+    exit_code = main(
+        [
+            "--api-key",
+            "key-1",
+            "--date",
+            "2026-03-06",
+            "--add-task",
+            "--start",
+            "10:00",
+            "--duration-min",
+            "120",
+            "--description",
+            "Deep work",
+        ]
+    )
+    captured = capsys.readouterr()
+
+    assert exit_code == 1
+    assert "--project-id or --project-name is required with --add-task" in captured.err
+
+
 def test_cli_prints_employee_tasks_from_file(monkeypatch, capsys):
     from clockifycal.cli import main
 
@@ -344,6 +439,150 @@ def test_loader_raises_if_workspace_not_found():
             api_key="token",
             user_payload={"id": "u1"},
             time_entries_payload=[],
+        )
+
+
+def test_create_task_for_day_creates_entry_for_current_user():
+    calls: list[dict[str, object]] = []
+
+    def fake_create_time_entry(**kwargs):
+        calls.append(kwargs)
+        return {"id": "te-1"}
+
+    result = create_task_for_day(
+        api_key="token",
+        description="Deep work",
+        start_hhmm="10:30",
+        duration_min=90,
+        user_timezone="UTC",
+        target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+        now_override="2026-03-06T08:00:00Z",
+        user_payload={"id": "u1", "defaultWorkspace": "w1", "email": "u@example.com"},
+        time_entries_payload=[],
+        workspace_projects_payload=[{"id": "p-1", "name": "Internal"}],
+        project_name="Internal",
+        create_time_entry_fn=fake_create_time_entry,
+    )
+
+    assert result["id"] == "te-1"
+    assert result["user_id"] == "u1"
+    assert result["workspace_id"] == "w1"
+    assert result["start"] == "2026-03-06T10:30:00+00:00"
+    assert result["end"] == "2026-03-06T12:00:00+00:00"
+    assert result["project_id"] == "p-1"
+    assert result["project_name"] == "Internal"
+    assert calls == [
+        {
+            "api_key": "token",
+            "workspace_id": "w1",
+            "start": "2026-03-06T10:30:00Z",
+            "end": "2026-03-06T12:00:00Z",
+            "description": "Deep work",
+            "project_id": "p-1",
+            "base_url": "https://api.clockify.me/api",
+            "timeout": 15,
+        }
+    ]
+
+
+def test_create_task_for_day_rejects_duration_over_limit():
+    with pytest.raises(ValueError, match="must not exceed 4 hours"):
+        create_task_for_day(
+            api_key="token",
+            description="Too long",
+            start_hhmm="10:00",
+            duration_min=MAX_NEW_ENTRY_MINUTES + 1,
+            user_payload={"id": "u1", "defaultWorkspace": "w1"},
+            time_entries_payload=[],
+        )
+
+
+def test_create_task_for_day_rejects_missing_project():
+    with pytest.raises(ValueError, match="Project is required"):
+        create_task_for_day(
+            api_key="token",
+            description="Deep work",
+            start_hhmm="10:00",
+            duration_min=60,
+            user_payload={"id": "u1", "defaultWorkspace": "w1"},
+            time_entries_payload=[],
+        )
+
+
+def test_create_task_for_day_rejects_other_user():
+    with pytest.raises(ValueError, match="only for the current user"):
+        create_task_for_day(
+            api_key="token",
+            description="Deep work",
+            start_hhmm="10:00",
+            duration_min=60,
+            user_id="another-user",
+            project_name="Internal",
+            user_payload={"id": "u1", "defaultWorkspace": "w1"},
+            time_entries_payload=[],
+            workspace_projects_payload=[{"id": "p-1", "name": "Internal"}],
+        )
+
+
+def test_create_task_for_day_rejects_overlap():
+    entries = [
+        {
+            "id": "te-1",
+            "description": "Existing",
+            "timeInterval": {"start": "2026-03-06T10:30:00Z", "end": "2026-03-06T11:30:00Z"},
+        }
+    ]
+
+    with pytest.raises(ValueError, match="overlaps existing entry"):
+        create_task_for_day(
+            api_key="token",
+            description="Deep work",
+            start_hhmm="11:00",
+            duration_min=60,
+            user_timezone="UTC",
+            target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+            now_override="2026-03-06T08:00:00Z",
+            project_name="Internal",
+            user_payload={"id": "u1", "defaultWorkspace": "w1"},
+            time_entries_payload=entries,
+            workspace_projects_payload=[{"id": "p-1", "name": "Internal"}],
+        )
+
+
+def test_create_task_for_day_rejects_unknown_project():
+    with pytest.raises(ValueError, match="Project 'Unknown' not found"):
+        create_task_for_day(
+            api_key="token",
+            description="Deep work",
+            start_hhmm="11:00",
+            duration_min=60,
+            user_timezone="UTC",
+            target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+            now_override="2026-03-06T08:00:00Z",
+            user_payload={"id": "u1", "defaultWorkspace": "w1"},
+            time_entries_payload=[],
+            workspace_projects_payload=[{"id": "p-1", "name": "Internal"}],
+            project_name="Unknown",
+        )
+
+
+def test_create_task_for_day_rejects_ambiguous_project():
+    with pytest.raises(ValueError, match="ambiguous"):
+        create_task_for_day(
+            api_key="token",
+            description="Deep work",
+            start_hhmm="11:00",
+            duration_min=60,
+            user_timezone="UTC",
+            target_date=datetime(2026, 3, 6, 0, 0, tzinfo=timezone.utc),
+            now_override="2026-03-06T08:00:00Z",
+            user_payload={"id": "u1", "defaultWorkspace": "w1"},
+            time_entries_payload=[],
+            workspace_projects_payload=[
+                {"id": "p-1", "name": "Internal"},
+                {"id": "p-2", "name": "Internal Tools"},
+            ],
+            project_name="Intern",
         )
 
 
@@ -555,3 +794,63 @@ def test_client_get_workspace_users_fetches_all_pages(monkeypatch):
 def test_client_get_workspace_users_validates_page_size():
     with pytest.raises(ValueError):
         get_workspace_users(api_key="token", workspace_id="w1", page_size=0)
+
+
+def test_client_get_workspace_projects_fetches_all_pages(monkeypatch):
+    calls: list[str] = []
+
+    def fake_http_get_json(url: str, api_key: str, timeout: int = 15):
+        calls.append(url)
+        if "page=1" in url:
+            return [{"id": "p-1"}, {"id": "p-2"}]
+        if "page=2" in url:
+            return [{"id": "p-3"}]
+        return []
+
+    monkeypatch.setattr("clockifycal.client._http_get_json", fake_http_get_json)
+
+    projects = get_workspace_projects(
+        api_key="token",
+        workspace_id="w1",
+        base_url="https://api.clockify.me/api",
+        page_size=2,
+    )
+
+    assert [p["id"] for p in projects] == ["p-1", "p-2", "p-3"]
+    assert any("page=1" in url and "page-size=2" in url for url in calls)
+    assert any("page=2" in url and "page-size=2" in url for url in calls)
+
+
+def test_client_create_time_entry_posts_payload(monkeypatch):
+    calls: list[dict[str, object]] = []
+
+    def fake_http_post_json(url: str, api_key: str, payload: dict[str, object], timeout: int = 15):
+        calls.append({"url": url, "api_key": api_key, "payload": payload, "timeout": timeout})
+        return {"id": "te-1"}
+
+    monkeypatch.setattr("clockifycal.client._http_post_json", fake_http_post_json)
+
+    response = create_time_entry(
+        api_key="token",
+        workspace_id="w1",
+        start="2026-03-06T10:00:00Z",
+        end="2026-03-06T11:00:00Z",
+        description="Deep work",
+        project_id="p-1",
+        timeout=9,
+    )
+
+    assert response == {"id": "te-1"}
+    assert calls == [
+        {
+            "url": "https://api.clockify.me/api/v1/workspaces/w1/time-entries",
+            "api_key": "token",
+            "payload": {
+                "start": "2026-03-06T10:00:00Z",
+                "end": "2026-03-06T11:00:00Z",
+                "description": "Deep work",
+                "projectId": "p-1",
+            },
+            "timeout": 9,
+        }
+    ]

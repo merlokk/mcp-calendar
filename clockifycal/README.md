@@ -5,6 +5,7 @@ It loads time entries and exposes:
 
 - event list for a day (`get_events_for_day`)
 - free slot list for a day (`get_free_slots_for_day`)
+- task creation for current user (`create_task_for_day`)
 - project names for a day (`get_project_names_for_day`)
 - employee tasks for a day (`get_employee_events_for_day`)
 - workspace users (`get_workspace_users_for_workspace`)
@@ -14,7 +15,9 @@ It loads time entries and exposes:
 - `GET /v1/user`
 - `GET /v1/workspaces/{workspaceId}/user/{userId}/time-entries`
 - `GET /v1/workspaces/{workspaceId}/projects/{projectId}`
+- `GET /v1/workspaces/{workspaceId}/projects`
 - `GET /v1/workspaces/{workspaceId}/users`
+- `POST /v1/workspaces/{workspaceId}/time-entries`
 
 Base URL default:
 
@@ -24,6 +27,7 @@ Base URL default:
 
 - `get_events_for_day(...)`: returns normalized events with flags (`is_current`, `is_next`, `is_next_overlapping`).
 - `get_free_slots_for_day(...)`: returns free intervals based on workday constants and current booked entries.
+- `create_task_for_day(...)`: creates one time entry for selected day for current user only.
 - `get_project_names_for_day(...)`: returns unique project names used by day entries.
 - `get_employee_events_for_day(...)`: returns day entries for a list of workspace employees,
   with `employee_name` and `project_name`.
@@ -46,6 +50,14 @@ Behavior:
 - A 30-minute lunch break is reserved inside lunch window if a gap exists.
 - Any free gap longer than 60 minutes is split into 60-minute slots.
 - Any free gap shorter than 60 minutes is kept as one slot.
+
+## Task creation rules
+
+- New task can be created only for the current Clockify user.
+- Maximum duration is 240 minutes (4 hours).
+- New task must not overlap any existing entry on that date.
+- Project is required for every new task: pass `--project-id` or `--project-name`.
+- Validation failures are returned as readable errors.
 
 ## CLI
 
@@ -94,6 +106,12 @@ Workspace users:
 python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --workspace-users --list
 ```
 
+Create a task for selected day:
+
+```bash
+python -m clockifycal.cli --api-key <CLOCKIFY_API_KEY> --date 2025-06-03 --add-task --start 10:00 --duration-min 90 --description "Deep work" --project-name "Internal" --pretty
+```
+
 Employee tasks by names from JSON file:
 
 ```bash
@@ -125,5 +143,11 @@ Supported args:
 - `--free-slots`
 - `--project-names`
 - `--workspace-users`
+- `--add-task`
+- `--start`
+- `--duration-min`
+- `--description`
+- `--project-id`
+- `--project-name`
 - `--employees-tasks`
 - `--employees-file`

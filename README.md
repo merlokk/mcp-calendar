@@ -52,6 +52,7 @@ python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --pretty
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --list
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-slots --pretty
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --free-slots --list
+python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --add-task --start 10:00 --duration-min 90 --description "Deep work" --project-name "Internal" --pretty
 python -m clockifycal.cli --api-key YOUR_KEY --date 2026-03-06 --tz UTC --employees-tasks --employees-file clockifycal/employees.json --list
 python -m clockifycal.cli --api-key YOUR_KEY --workspace-users --list
 ```
@@ -77,6 +78,7 @@ Available tools:
 - `get_clockify_tasks`
 - `get_clockify_free_slots`
 - `get_clockify_employee_tasks`
+- `create_clockify_task`
 
 Run MCP server:
 
@@ -94,7 +96,17 @@ python run-mcp.py get_free_slots --date 2026-03-06 --min-duration 30
 python run-mcp.py get_clockify_tasks --date 2026-03-06
 python run-mcp.py get_clockify_free_slots --date 2026-03-06
 python run-mcp.py get_clockify_employee_tasks --date 2026-03-06 --employees-file clockifycal/employees.json
+python run-mcp.py create_clockify_task --date 2026-03-06 --start-time 15:00 --duration-min 60 --description "Test task" --project-name "T-Platform" --confirm
 ```
+
+`create_clockify_task` restrictions:
+
+- creates entries only for current Clockify user
+- project is mandatory (`project_name` or `project_id`)
+- max duration is 240 minutes
+- new task must not overlap existing entries
+- every call requires fresh explicit user confirmation
+- server enforces `confirm=true`, but cannot technically prove that the confirmation came from a human; that depends on the MCP client/host
 
 ## Environment variables
 

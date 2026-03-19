@@ -44,6 +44,7 @@ from mcp_calendar import (
     get_clockify_tasks,
     get_clockify_free_slots,
     get_clockify_employee_tasks,
+    create_clockify_task,
     get_server_overview,
 )  # noqa: E402
 
@@ -58,7 +59,7 @@ def _parse_args() -> argparse.Namespace:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    p.add_argument("tool", choices=["get_now", "get_day", "get_free_slots", "get_clockify_tasks", "get_clockify_free_slots", "get_clockify_employee_tasks", "get_server_overview"],
+    p.add_argument("tool", choices=["get_now", "get_day", "get_free_slots", "get_clockify_tasks", "get_clockify_free_slots", "get_clockify_employee_tasks", "create_clockify_task", "get_server_overview"],
                    help="Tool to call")
 
     p.add_argument("--override-now", metavar="ISO",
@@ -77,6 +78,18 @@ def _parse_args() -> argparse.Namespace:
                    help="Working day end (default: 18:00)")
     p.add_argument("--employees-file", metavar="PATH",
                    help="Employees JSON file path (for get_clockify_employee_tasks)")
+    p.add_argument("--start-time", metavar="HH:MM",
+                   help="Clockify task start time (for create_clockify_task)")
+    p.add_argument("--duration-min", metavar="MIN", type=int,
+                   help="Clockify task duration in minutes (for create_clockify_task)")
+    p.add_argument("--description", metavar="TEXT",
+                   help="Clockify task description (for create_clockify_task)")
+    p.add_argument("--project-name", metavar="TEXT",
+                   help="Clockify project name (for create_clockify_task)")
+    p.add_argument("--project-id", metavar="ID",
+                   help="Clockify project id (for create_clockify_task)")
+    p.add_argument("--confirm", action="store_true",
+                   help="Required confirmation flag for create_clockify_task")
 
     return p.parse_args()
 
@@ -120,6 +133,18 @@ def main() -> None:
                 date_str=args.date,
                 override_now=args.override_now,
                 employees_file=args.employees_file,
+            )
+
+        elif args.tool == "create_clockify_task":
+            result = create_clockify_task(
+                date_str=args.date,
+                start_time=args.start_time,
+                duration_min=args.duration_min,
+                description=args.description,
+                project_name=args.project_name,
+                project_id=args.project_id,
+                confirm=args.confirm,
+                override_now=args.override_now,
             )
 
         elif args.tool == "get_server_overview":

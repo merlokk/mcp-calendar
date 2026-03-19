@@ -4,7 +4,7 @@ from datetime import date, datetime, timedelta, timezone
 from typing import Any, Optional
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from .client import DEFAULT_BASE_URL, get_current_user, get_project, get_time_entries, get_workspace_users
+from .client import DEFAULT_BASE_URL, create_time_entry, get_current_user, get_project, get_time_entries, get_workspace_projects, get_workspace_users
 
 WORKDAY_START_HHMM = "10:00"
 WORKDAY_END_HHMM = "19:00"
@@ -12,6 +12,7 @@ LUNCH_WINDOW_START_HHMM = "13:30"
 LUNCH_WINDOW_END_HHMM = "17:00"
 LUNCH_BREAK_MINUTES = 30
 MAX_FREE_SLOT_MINUTES = 60
+MAX_NEW_ENTRY_MINUTES = 240
 
 
 def _to_utc_iso(dt: datetime) -> str:
@@ -85,6 +86,74 @@ def _parse_hhmm(value: str) -> tuple[int, int]:
 def _build_local_dt(day: date, tz: ZoneInfo, hhmm: str) -> datetime:
     h, m = _parse_hhmm(hhmm)
     return datetime(day.year, day.month, day.day, h, m, tzinfo=tz)
+
+
+def _validate_new_entry_duration(duration_min: int) -> None:
+    if duration_min <= 0:
+        raise ValueError("Task duration must be greater than 0 minutes")
+    if duration_min > MAX_NEW_ENTRY_MINUTES:
+        raise ValueError("Task duration must not exceed 4 hours")
+
+
+def _validate_project_selected(project_id: str | None, project_name: str | None) -> None:
+    if (project_id or "").strip() or (project_name or "").strip():
+        return
+    raise ValueError("Project is required; pass project_id or project_name")
+
+
+def _check_no_overlap(
+    *,
+    start_utc: datetime,
+    end_utc: datetime,
+    existing_events: list[dict[str, Any]],
+) -> None:
+    for event in existing_events:
+        existing_start = _parse_iso_to_utc(str(event.get("start_iso", "")))
+        existing_end = _parse_iso_to_utc(str(event.get("end_iso", "")))
+        if start_utc < existing_end and end_utc > existing_start:
+            raise ValueError(
+                "Task overlaps existing entry "
+                f"'{event.get('summary', 'Clockify Time Entry')}' "
+                f"({existing_start.isoformat()} - {existing_end.isoformat()})"
+            )
+
+
+def _resolve_single_project(
+    *,
+    project_id: str | None,
+    project_name: str | None,
+    projects: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    resolved_project_id = (project_id or "").strip()
+    resolved_project_name = (project_name or "").strip()
+    if not resolved_project_id and not resolved_project_name:
+        return None
+
+    if resolved_project_id:
+        for project in projects:
+            if str(project.get("id", "")).strip() == resolved_project_id:
+                return project
+        raise ValueError(f"Project '{resolved_project_id}' not found in workspace")
+
+    query = resolved_project_name.lower()
+    exact = [p for p in projects if str(p.get("name", "")).strip().lower() == query]
+    if len(exact) == 1:
+        return exact[0]
+
+    startswith = [p for p in projects if str(p.get("name", "")).strip().lower().startswith(query)]
+    if len(startswith) == 1:
+        return startswith[0]
+
+    contains = [p for p in projects if query in str(p.get("name", "")).strip().lower()]
+    if len(contains) == 1:
+        return contains[0]
+
+    candidates = exact or startswith or contains
+    if not candidates:
+        raise ValueError(f"Project '{resolved_project_name}' not found in workspace")
+
+    names = ", ".join(sorted(str(project.get("name", "")).strip() for project in candidates)[:5])
+    raise ValueError(f"Project '{resolved_project_name}' is ambiguous; matches: {names}")
 
 
 def _merge_intervals(intervals: list[tuple[datetime, datetime]]) -> list[tuple[datetime, datetime]]:
@@ -444,6 +513,109 @@ def get_project_names_for_day(
         out.append({"project_id": project_id, "project_name": name})
 
     return out
+
+
+def create_task_for_day(
+    *,
+    api_key: str,
+    description: str,
+    start_hhmm: str,
+    duration_min: int,
+    user_timezone: str = "UTC",
+    target_date: Optional[date | datetime] = None,
+    now_override: Optional[datetime | str] = None,
+    base_url: str = DEFAULT_BASE_URL,
+    workspace_id: str | None = None,
+    user_id: str | None = None,
+    project_id: str | None = None,
+    project_name: str | None = None,
+    timeout: int = 15,
+    user_payload: Optional[dict[str, Any]] = None,
+    time_entries_payload: Optional[list[dict[str, Any]]] = None,
+    workspace_projects_payload: Optional[list[dict[str, Any]]] = None,
+    create_time_entry_fn: Any = create_time_entry,
+) -> dict[str, Any]:
+    cleaned_description = description.strip()
+    if not cleaned_description:
+        raise ValueError("Task description must be non-empty")
+
+    _validate_new_entry_duration(duration_min)
+    _validate_project_selected(project_id, project_name)
+
+    now_utc = _resolve_now(now_override)
+    _, _, day = _compute_window(user_timezone, target_date, now_utc)
+    tz = _resolve_tz(user_timezone)
+    start_local = _build_local_dt(day, tz, start_hhmm)
+    end_local = start_local + timedelta(minutes=duration_min)
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+
+    user = user_payload or get_current_user(api_key=api_key, base_url=base_url, timeout=timeout)
+    resolved_workspace_id = workspace_id or str(user.get("defaultWorkspace", "")).strip()
+    resolved_user_id = str(user.get("id", "")).strip()
+    requested_user_id = (user_id or "").strip()
+    if not resolved_workspace_id:
+        raise ValueError("Clockify user payload has no defaultWorkspace and workspace_id not provided")
+    if not resolved_user_id:
+        raise ValueError("Clockify user payload has no id")
+    if requested_user_id and requested_user_id != resolved_user_id:
+        raise ValueError("Task creation is allowed only for the current user")
+
+    projects = workspace_projects_payload
+    if project_id or project_name:
+        if projects is None:
+            projects = get_workspace_projects(
+                api_key=api_key,
+                workspace_id=resolved_workspace_id,
+                base_url=base_url,
+                timeout=timeout,
+            )
+        resolved_project = _resolve_single_project(
+            project_id=project_id,
+            project_name=project_name,
+            projects=projects,
+        )
+    else:
+        resolved_project = None
+
+    existing_events = get_events_for_day(
+        api_key=api_key,
+        user_timezone=user_timezone,
+        target_date=day,
+        now_override=now_utc,
+        base_url=base_url,
+        workspace_id=resolved_workspace_id,
+        user_id=resolved_user_id,
+        timeout=timeout,
+        user_payload=user,
+        time_entries_payload=time_entries_payload,
+    )
+    _check_no_overlap(start_utc=start_utc, end_utc=end_utc, existing_events=existing_events)
+
+    payload = create_time_entry_fn(
+        api_key=api_key,
+        workspace_id=resolved_workspace_id,
+        start=_to_utc_iso(start_utc),
+        end=_to_utc_iso(end_utc),
+        description=cleaned_description,
+        project_id=str(resolved_project.get("id", "")).strip() or None if resolved_project else None,
+        base_url=base_url,
+        timeout=timeout,
+    )
+
+    entry_id = str(payload.get("id", "")).strip()
+    return {
+        "id": entry_id or None,
+        "description": cleaned_description,
+        "date": day.isoformat(),
+        "start": start_local.isoformat(),
+        "end": end_local.isoformat(),
+        "duration_min": duration_min,
+        "workspace_id": resolved_workspace_id,
+        "user_id": resolved_user_id,
+        "project_id": str(resolved_project.get("id", "")).strip() or None if resolved_project else None,
+        "project_name": str(resolved_project.get("name", "")).strip() or None if resolved_project else None,
+    }
 
 
 def _employee_display_name(user_payload: dict[str, Any]) -> str:
