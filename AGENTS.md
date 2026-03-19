@@ -23,3 +23,4 @@ Agent entrypoint for this repository.
 - Keep changes minimal and targeted.
 - Keep workflow day-based when possible (`date_str` / `--date`).
 - Update docs when behavior changes.
+- After any source code change, run the full test suite: `py -m pytest -q test_clockifycal.py test_mcp_calendar.py test-lambda.py icscal/tests.py`

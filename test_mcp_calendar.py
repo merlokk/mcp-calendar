@@ -324,42 +324,14 @@ def test_create_clockify_task_returns_created_task(monkeypatch):
             duration_min=60,
             description="Deep work",
             project_name="T-Platform",
-            confirm=True,
             override_now="2026-03-06T08:00:00Z",
         )
 
     assert data["source"] == "clockify"
     assert data["action"] == "create_task"
-    assert data["confirmationRequired"] is True
-    assert data["confirmationVerifiedOnlyByFlag"] is True
+    assert data["responsibleOperation"] is True
+    assert data["executed"] is True
     assert data["task"]["project_name"] == "T-Platform"
-
-
-def test_create_clockify_task_requires_confirmation(monkeypatch):
-    srv._cache.clear()
-    monkeypatch.setattr(srv, "create_clockify_task_for_day", lambda **kwargs: {})
-
-    with patch.dict(
-        "os.environ",
-        {
-            "CLOCKIFY_API_KEY": "key-1",
-            "TZ": "UTC",
-        },
-        clear=False,
-    ):
-        try:
-            srv.create_clockify_task(
-                date_str="2026-03-06",
-                start_time="15:00",
-                duration_min=60,
-                description="Deep work",
-                project_name="T-Platform",
-                confirm=False,
-                override_now="2026-03-06T08:00:00Z",
-            )
-            assert False, "Expected ValueError"
-        except ValueError as exc:
-            assert "requires explicit user confirmation" in str(exc)
 
 
 def test_create_clockify_task_requires_api_key(monkeypatch):
@@ -381,7 +353,6 @@ def test_create_clockify_task_requires_api_key(monkeypatch):
                 duration_min=60,
                 description="Deep work",
                 project_name="T-Platform",
-                confirm=True,
                 override_now="2026-03-06T08:00:00Z",
             )
             assert False, "Expected ValueError"
@@ -397,6 +368,7 @@ def test_get_server_overview_contains_purpose_and_tool_params():
     assert "ICS" in data["purpose"]
     assert "Clockify" in data["purpose"]
     assert "target day" in data["primaryWorkflow"]
+    assert "actually call the relevant tool" in data["toolUsagePolicy"]
     assert isinstance(data["tools"], list) and len(data["tools"]) >= 8
 
     names = [tool["name"] for tool in data["tools"]]
@@ -409,9 +381,10 @@ def test_get_server_overview_contains_purpose_and_tool_params():
 
     day_tool = next(tool for tool in data["tools"] if tool["name"] == "get_day")
     assert any(param["name"] == "date_str" for param in day_tool["params"])
+    assert "do not fabricate" in day_tool["description"]
     create_tool = next(tool for tool in data["tools"] if tool["name"] == "create_clockify_task")
-    assert any(param["name"] == "confirm" for param in create_tool["params"])
-    assert "confirmation" in create_tool["description"]
+    assert any(param["name"] == "project_name" for param in create_tool["params"])
+    assert "responsible write operation" in create_tool["description"]
 
 
 def test_tool_logging_writes_jsonl_when_enabled(monkeypatch):
@@ -512,7 +485,6 @@ def test_create_clockify_task_logging_writes_request_and_response(monkeypatch):
                 duration_min=60,
                 description="Deep work",
                 project_name="T-Platform",
-                confirm=True,
                 override_now="2026-03-06T08:00:00Z",
             )
 
@@ -526,7 +498,6 @@ def test_create_clockify_task_logging_writes_request_and_response(monkeypatch):
         response_record = json.loads(lines[1])
 
         assert request_record["tool"] == "create_clockify_task"
-        assert request_record["args"]["confirm"] is True
         assert request_record["args"]["project_name"] == "T-Platform"
         assert response_record["response"]["task"]["project_name"] == "T-Platform"
     finally:
@@ -544,7 +515,6 @@ def test_run_mcp_create_clockify_task_smoke(monkeypatch):
         description,
         project_name,
         project_id,
-        confirm,
         override_now,
     ):
         assert date_str == "2026-03-06"
@@ -553,13 +523,12 @@ def test_run_mcp_create_clockify_task_smoke(monkeypatch):
         assert description == "Deep work"
         assert project_name == "T-Platform"
         assert project_id is None
-        assert confirm is True
         assert override_now is None
         return {
             "source": "clockify",
             "action": "create_task",
-            "confirmationRequired": True,
-            "confirmationVerifiedOnlyByFlag": True,
+            "responsibleOperation": True,
+            "executed": True,
             "task": {
                 "id": "te-1",
                 "description": "Deep work",
@@ -600,7 +569,6 @@ def test_run_mcp_create_clockify_task_smoke(monkeypatch):
             "Deep work",
             "--project-name",
             "T-Platform",
-            "--confirm",
         ],
     ):
         run_mcp.main()

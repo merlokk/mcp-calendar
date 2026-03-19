@@ -96,7 +96,7 @@ python run-mcp.py get_free_slots --date 2026-03-06 --min-duration 30
 python run-mcp.py get_clockify_tasks --date 2026-03-06
 python run-mcp.py get_clockify_free_slots --date 2026-03-06
 python run-mcp.py get_clockify_employee_tasks --date 2026-03-06 --employees-file clockifycal/employees.json
-python run-mcp.py create_clockify_task --date 2026-03-06 --start-time 15:00 --duration-min 60 --description "Test task" --project-name "T-Platform" --confirm
+python run-mcp.py create_clockify_task --date 2026-03-06 --start-time 15:00 --duration-min 60 --description "Test task" --project-name "T-Platform"
 ```
 
 `create_clockify_task` restrictions:
@@ -105,8 +105,8 @@ python run-mcp.py create_clockify_task --date 2026-03-06 --start-time 15:00 --du
 - project is mandatory (`project_name` or `project_id`)
 - max duration is 240 minutes
 - new task must not overlap existing entries
-- every call requires fresh explicit user confirmation
-- server enforces `confirm=true`, but cannot technically prove that the confirmation came from a human; that depends on the MCP client/host
+- this is a responsible write operation
+- callers must not invent/simulate execution; to create the task they must actually call the tool
 
 ## Environment variables
 

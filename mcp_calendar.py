@@ -32,7 +32,7 @@ Tools
   get_clockify_tasks -> Clockify time entries for today or a given date
   get_clockify_free_slots -> free slots from Clockify time entries
   get_clockify_employee_tasks -> Clockify employee tasks for today or a given date
-  create_clockify_task -> Create one Clockify task for the current user after explicit confirmation
+  create_clockify_task -> Create one Clockify task for the current user
 
 """
 
@@ -81,9 +81,11 @@ mcp = FastMCP(
         "Server purpose: read calendar events from ICS sources and read occupied time from Clockify. "
         "Primary workflow is day-based: pick one target date and call tools for that date. "
         "Use get_server_overview to get full tool descriptions and required parameters. "
-        "Any write operation in Clockify is destructive and must be executed only after a fresh, explicit user confirmation for that exact action. "
-        "For create_clockify_task, never call the tool unless the user's latest relevant message explicitly approves creating that specific task. "
-        "Treat prior confirmations as expired after any task details change."
+        "For every tool on this server, do not simulate, infer, or claim execution from reasoning alone: "
+        "you must actually call the tool to obtain or change data. "
+        "Any write operation in Clockify is a responsible operation and must be treated carefully. "
+        "For create_clockify_task, do not simulate or claim execution from reasoning alone: you must actually call the tool to perform the action. "
+        "If the task details change, use the updated details when calling the tool instead of assuming a prior plan was executed."
     ),
 )
 
@@ -447,15 +449,6 @@ def _fetch_clockify_employee_events(
     return events
 
 
-def _require_clockify_write_confirmation(confirm: bool) -> None:
-    if confirm:
-        return
-    raise ValueError(
-        "Clockify write operation requires explicit user confirmation; "
-        "call this tool only after the user approves this exact task creation and set confirm=true"
-    )
-
-
 # ---------------------------------------------------------------------------
 # Tool 1 — get_now
 # ---------------------------------------------------------------------------
@@ -764,7 +757,6 @@ def create_clockify_task(
     description: str,
     project_name: Optional[str] = None,
     project_id: Optional[str] = None,
-    confirm: bool = False,
     override_now: Optional[str] = None,
 ) -> dict:
     """
@@ -775,13 +767,11 @@ def create_clockify_task(
     - Project is required.
     - Duration must be <= 240 minutes.
     - New task must not overlap existing entries.
-    - Caller must obtain explicit user confirmation for each invocation and pass confirm=True.
+    - This is a responsible write operation in Clockify.
 
     Note:
-    - The server can enforce confirm=True, but cannot independently verify that a human actually confirmed it.
+    - The caller must actually execute this tool to create the task; do not pretend the command was executed.
     """
-    _require_clockify_write_confirmation(confirm)
-
     cfg = _clockify_config()
     if not cfg["api_key"]:
         raise ValueError("CLOCKIFY_API_KEY environment variable is not set")
@@ -810,8 +800,8 @@ def create_clockify_task(
     return {
         "source": "clockify",
         "action": "create_task",
-        "confirmationRequired": True,
-        "confirmationVerifiedOnlyByFlag": True,
+        "responsibleOperation": True,
+        "executed": True,
         "task": created,
     }
 
@@ -832,23 +822,27 @@ def get_server_overview() -> dict:
             "Work with one target day. Choose date_str (YYYY-MM-DD) and call "
             "the corresponding day-based tools."
         ),
+        "toolUsagePolicy": (
+            "Do not invent outputs and do not pretend a tool was executed. "
+            "For both read and write operations, actually call the relevant tool to get the result."
+        ),
         "dayBased": True,
         "tools": [
             {
                 "name": "get_server_overview",
-                "description": "Return this reference: purpose, workflows, tools, parameters.",
+                "description": "Return this reference: purpose, workflows, tools, parameters. Call this tool instead of guessing server capabilities.",
                 "params": [],
             },
             {
                 "name": "get_now",
-                "description": "Current/next status for now based on ICS events for today's date.",
+                "description": "Current/next status for now based on ICS events for today's date. Call the tool to get actual current data; do not infer it without execution.",
                 "params": [
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
                 ],
             },
             {
                 "name": "get_day",
-                "description": "All ICS events for a specific day.",
+                "description": "All ICS events for a specific day. Call the tool to get actual data; do not fabricate day contents.",
                 "params": [
                     {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
@@ -856,7 +850,7 @@ def get_server_overview() -> dict:
             },
             {
                 "name": "get_free_slots",
-                "description": "Free slots for a specific day from ICS events.",
+                "description": "Free slots for a specific day from ICS events. Call the tool to compute actual free slots; do not estimate them without execution.",
                 "params": [
                     {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
                     {"name": "min_duration", "type": "int", "required": False, "default": 30},
@@ -867,7 +861,7 @@ def get_server_overview() -> dict:
             },
             {
                 "name": "get_clockify_tasks",
-                "description": "Clockify occupied entries for a specific day.",
+                "description": "Clockify occupied entries for a specific day. Call the tool to get actual Clockify data; do not invent entries.",
                 "params": [
                     {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
@@ -876,7 +870,7 @@ def get_server_overview() -> dict:
             },
             {
                 "name": "get_clockify_free_slots",
-                "description": "Free slots for a specific day based on Clockify occupied entries.",
+                "description": "Free slots for a specific day based on Clockify occupied entries. Call the tool to compute actual results; do not estimate them without execution.",
                 "params": [
                     {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
@@ -885,7 +879,7 @@ def get_server_overview() -> dict:
             },
             {
                 "name": "get_clockify_employee_tasks",
-                "description": "Clockify employee tasks for a specific day from employees JSON file.",
+                "description": "Clockify employee tasks for a specific day from employees JSON file. Call the tool to get actual employee data; do not fabricate results.",
                 "params": [
                     {"name": "date_str", "type": "string|null", "required": False, "format": "YYYY-MM-DD"},
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
@@ -898,8 +892,9 @@ def get_server_overview() -> dict:
                 "description": (
                     "Create one Clockify task for current user only. "
                     "Restrictions: project is required, duration must be <= 240 minutes, "
-                    "task must not overlap existing entries, and every invocation requires fresh explicit user confirmation. "
-                    "Server enforces confirm=true but cannot independently verify human approval."
+                    "task must not overlap existing entries. "
+                    "This is a responsible write operation. "
+                    "Do not claim it was done unless you actually call the tool."
                 ),
                 "params": [
                     {"name": "date_str", "type": "string", "required": True, "format": "YYYY-MM-DD"},
@@ -908,17 +903,15 @@ def get_server_overview() -> dict:
                     {"name": "description", "type": "string", "required": True},
                     {"name": "project_name", "type": "string|null", "required": False},
                     {"name": "project_id", "type": "string|null", "required": False},
-                    {"name": "confirm", "type": "bool", "required": True, "mustBe": True},
                     {"name": "override_now", "type": "string|null", "required": False, "format": "ISO 8601 datetime"},
                 ],
                 "envRequired": ["CLOCKIFY_API_KEY"],
                 "notes": [
                     "Only current user can be used for creation.",
                     "Either project_name or project_id is required.",
-                    "Ask for user confirmation every time before calling this tool.",
-                    "Never rely on an older confirmation if date, time, duration, description, or project changed.",
-                    "Best practice for the caller: quote or restate the latest user approval before sending confirm=true.",
-                    "MCP/FastMCP does not provide a guaranteed server-side human-confirmation primitive here; confirm=true is an enforced caller acknowledgment, not proof.",
+                    "This tool changes data in Clockify and should be treated as a responsible operation.",
+                    "Never invent or simulate execution results; if the user asked to create a task, actually call the tool.",
+                    "If date, time, duration, description, or project changed, call the tool with the updated values.",
                 ],
             },
         ],

@@ -88,8 +88,6 @@ def _parse_args() -> argparse.Namespace:
                    help="Clockify project name (for create_clockify_task)")
     p.add_argument("--project-id", metavar="ID",
                    help="Clockify project id (for create_clockify_task)")
-    p.add_argument("--confirm", action="store_true",
-                   help="Required confirmation flag for create_clockify_task")
 
     return p.parse_args()
 
@@ -143,7 +141,6 @@ def main() -> None:
                 description=args.description,
                 project_name=args.project_name,
                 project_id=args.project_id,
-                confirm=args.confirm,
                 override_now=args.override_now,
             )
 
