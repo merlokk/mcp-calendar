@@ -342,6 +342,12 @@ def _fmt(ev: dict, tz: pytz.BaseTzInfo) -> dict:
     }
 
 
+def _fmt_day_event(ev: dict, tz: pytz.BaseTzInfo) -> dict:
+    data = _fmt(ev, tz)
+    data["calendarId"] = ev.get("calendar_id")
+    return data
+
+
 def _minutes_until(now_utc: datetime, ev: Optional[dict]) -> Optional[int]:
     if ev is None:
         return None
@@ -521,7 +527,7 @@ def get_day(
             "end":   window_end.isoformat(),
         },
         "count":  len(events),
-        "events": [_fmt(e, tz) for e in events],
+        "events": [_fmt_day_event(e, tz) for e in events],
     }
 
 

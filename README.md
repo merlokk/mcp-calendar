@@ -73,7 +73,7 @@ Available tools:
 
 - `get_server_overview` (returns purpose, workflow, tools, params)
 - `get_now`
-- `get_day`
+- `get_day` (`events[]` includes `calendarId`)
 - `get_free_slots`
 - `get_clockify_tasks`
 - `get_clockify_free_slots`

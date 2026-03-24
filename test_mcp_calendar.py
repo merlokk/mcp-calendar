@@ -59,6 +59,62 @@ def _clockify_employee_event(
     return data
 
 
+def _ics_event(
+    uid: str,
+    summary: str,
+    start_iso: str,
+    end_iso: str,
+    calendar_id: int,
+) -> dict:
+    return {
+        "uid": uid,
+        "summary": summary,
+        "location": None,
+        "organizer": "u@example.com",
+        "start_iso": start_iso,
+        "end_iso": end_iso,
+        "start_ms": 0,
+        "end_ms": 0,
+        "calendar_id": calendar_id,
+        "calendar_url": f"https://calendar.example/{calendar_id}.ics",
+        "is_current": False,
+        "is_next": False,
+        "is_next_overlapping": False,
+    }
+
+
+def test_get_day_includes_calendar_id(monkeypatch):
+    srv._cache.clear()
+
+    def fake_ics_loader(**kwargs):
+        assert kwargs["user_timezone"] == "UTC"
+        return [
+            _ics_event(
+                "ev-1",
+                "Meeting",
+                "2026-03-06T10:00:00+00:00",
+                "2026-03-06T11:00:00+00:00",
+                1,
+            )
+        ]
+
+    monkeypatch.setattr(srv, "get_events_for_day", fake_ics_loader)
+
+    with patch.dict(
+        "os.environ",
+        {
+            "ICS_URLS": "https://calendar.example/1.ics https://calendar.example/2.ics",
+            "TZ": "UTC",
+        },
+        clear=False,
+    ):
+        data = srv.get_day(date_str="2026-03-06", override_now="2026-03-06T08:00:00Z")
+
+    assert data["count"] == 1
+    assert data["events"][0]["title"] == "Meeting"
+    assert data["events"][0]["calendarId"] == 1
+
+
 def test_get_clockify_tasks_returns_formatted_tasks(monkeypatch):
     srv._cache.clear()
 
